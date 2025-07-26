@@ -2,6 +2,14 @@
 
 ## Command Line Interface (CLI) Usage
 
+### Installation
+
+To install AsmX G3, run the following command:
+```
+cd src && npm install
+cd ../
+```
+
 ### Usage
 
 ```

@@ -81,7 +81,7 @@ function version() {
 }
 
 function dumpversion() {
-  Server.journal.log('Version: v28');
+  Server.journal.log('Version: v28 (rev 1.0)');
 }
 
 function dumpmachine() {
