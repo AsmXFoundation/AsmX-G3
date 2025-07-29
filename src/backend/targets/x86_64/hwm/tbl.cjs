@@ -4,7 +4,7 @@ exports.AssemblyInstructionDescriptorTable = void 0;
 const header_cjs_1 = require("../header.cjs");
 class AssemblyInstructionDescriptorTable {
     static defineInstructions() {
-        // Массив инструкций: [мнемоника, базовый опкод]
+        // Instruction array: [mnemonic, base opcode]
         const arithmeticInstructions = [
             ['ADD', 0x00], // 00, 01, 02, 03, 04, 05  | 80 /0, 81 /0, 83 /0
             ['OR', 0x08], // 08, 09, 0A, 0B, 0C, 0D  | 80 /1, 81 /1, 83 /1

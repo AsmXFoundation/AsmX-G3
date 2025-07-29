@@ -16,7 +16,7 @@ export class AssemblyInstructionDescriptorTable {
   private static instructionSet: Map<string, InstructionDefinition> = new Map();
 
   public static defineInstructions() {
-    // Массив инструкций: [мнемоника, базовый опкод]
+    // Instruction array: [mnemonic, base opcode]
     const arithmeticInstructions: [string, number][] = [
       ['ADD', 0x00], // 00, 01, 02, 03, 04, 05  | 80 /0, 81 /0, 83 /0
       ['OR', 0x08],  // 08, 09, 0A, 0B, 0C, 0D  | 80 /1, 81 /1, 83 /1
