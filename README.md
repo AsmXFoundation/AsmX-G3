@@ -1,5 +1,7 @@
 # AsmX G3 Compiler
 
+[ChangeLog](./changelog)
+
 ## Command Line Interface (CLI) Usage
 
 ### Installation

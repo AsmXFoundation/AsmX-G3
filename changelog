@@ -1,0 +1,61 @@
+### **Changelog: rev 2.0**
+
+This release introduces a critical stability fix for the compiler and expands the supported `amd64` instruction set. The revision is updated from `1.0` to `2.0` to reflect these significant improvements.
+
+---
+
+### **Bug Fixes**
+
+*   **Compiler: Resolved a critical null reference error during instruction parsing.**
+
+    A recurring internal system error that caused an `Unhandled Rejection` has been fixed. This error occurred when the compiler's parser attempted to process instructions that have no operands.
+
+    **Symptom:** The compiler would crash with the following error message, preventing the assembly of valid code that included operand-less instructions.
+    ```
+    ✘ Unhandled Rejection, Reason: Cannot read properties of undefined (reading 'type')
+    ```
+
+    **Root Cause:** The `zcc_build_generic_instruction` method directly accessed `ast[0].type` without first verifying that the `ast[0]` element existed. For instructions without operands, this `ast[0]` was `undefined`, leading to a `TypeError` and a compiler crash.
+
+    **Solution:** The code has been patched to use optional chaining (`?.`). The condition is now `ast[0]?.type`, which safely checks for the existence of `ast[0]` and its `type` property before attempting to access it. This ensures that operand-less instructions are handled gracefully by the parser.
+
+    **Before:**
+    ```javascript
+      static zcc_build_generic_instruction(ast) {
+        if (ast[0].type == TypeOfAtomicExpression.ARGUMENTS) { // Crashes if ast[0] is undefined
+          return ast[0].body.values;
+        }
+        return ast;
+      }
+    ```
+
+    **After (Fix Implemented):**
+    ```javascript
+      static zcc_build_generic_instruction(ast) {
+        if (ast[0]?.type && ast[0].type == TypeOfAtomicExpression.ARGUMENTS) { // Safely checks for existence
+          return ast[0].body.values;
+        }
+        return ast;
+      }
+    ```
+
+### **New Features**
+
+*   **Instruction Set: Added support for common `amd64` instructions without operands.**
+
+    To enhance low-level programming capabilities, the instruction set has been updated to include several fundamental `amd64` instructions that do not take any operands.
+
+    The following instructions are now fully supported:
+    *   `nop`: No Operation
+    *   `fwait`: Check pending unmasked floating-point exceptions
+    *   `pushf`: Push rFLAGS Register onto the Stack
+    *   `popf`: Pop Stack into rFLAGS Register
+    *   `sahf`: Store AH into Flags
+    *   `lahf`: Load Status Flags into AH Register
+
+    **Implementation:** These instructions have been mapped within the compiler's `instructionSet`, allowing the assembler to correctly recognize and encode them.
+
+### **Developer Impact**
+
+Developers can now write code utilizing these common, operand-less instructions without encountering a compiler crash. This fix removes a significant blocker and enables more flexible and direct low-level code generation.
+

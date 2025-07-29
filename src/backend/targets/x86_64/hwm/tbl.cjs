@@ -361,6 +361,65 @@ class AssemblyInstructionDescriptorTable {
             };
             this.instructionSet.set('lea', leaDef);
         });
+        const instructions_without_operands_map = [
+            {
+                mnemonic: 'nop',
+                variants: [
+                    {
+                        opcode: [0x90],
+                        operands: []
+                    }
+                ]
+            },
+            {
+                mnemonic: 'fwait',
+                variants: [
+                    {
+                        opcode: [0x9B],
+                        operands: []
+                    }
+                ]
+            },
+            {
+                mnemonic: 'pushf',
+                variants: [
+                    {
+                        opcode: [0x9C],
+                        operands: []
+                    }
+                ]
+            },
+            {
+                mnemonic: 'popf',
+                variants: [
+                    {
+                        opcode: [0x9D],
+                        operands: []
+                    }
+                ]
+            },
+            {
+                mnemonic: 'sahf',
+                variants: [
+                    {
+                        opcode: [0x9E],
+                        operands: []
+                    }
+                ]
+            },
+            {
+                mnemonic: 'lahf',
+                variants: [
+                    {
+                        opcode: [0x9F],
+                        operands: []
+                    }
+                ]
+            }
+        ];
+        for (const instruction_define of instructions_without_operands_map) {
+            this.instructionSet.set(instruction_define.mnemonic, instruction_define);
+        }
     }
     static getInstructionSet() {
         return this.instructionSet;

@@ -149,7 +149,7 @@ class BuilderExpression {
   }
 
   static zcc_build_generic_instruction(ast) {
-    if (ast[0].type == TypeOfAtomicExpression.ARGUMENTS) {
+    if (ast[0]?.type && ast[0].type == TypeOfAtomicExpression.ARGUMENTS) {
       return ast[0].body.values;
     }
     return ast;

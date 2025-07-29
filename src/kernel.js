@@ -70,7 +70,7 @@ function helper() {
   journal_composer_TL3('Compilation Options:');
   journal_composer_TL3("  -r, --release           Create a executable file");
   journal_composer_TL3("  -o, --objname           Set the output file name");
-  journal_composer_TL3("  -m, --march             Specify the target CPU architecture (x86_64, riscv, or arm64) for compilation");
+  journal_composer_TL3("  -m, --march             Specify the target CPU architecture (x86_64, x64, amd64) for compilation");
   journal_composer_TL3('Commands:');
   journal_composer_TL3('  --update                Update AsmX compilation platform');
 }
@@ -81,7 +81,7 @@ function version() {
 }
 
 function dumpversion() {
-  Server.journal.log('Version: v28 (rev 1.0)');
+  Server.journal.log('Version: v28 (rev 2.0)');
 }
 
 function dumpmachine() {
