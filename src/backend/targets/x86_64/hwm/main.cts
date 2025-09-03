@@ -270,6 +270,7 @@ class HardwareMachineFactoryEncoder {
         modrm.rm = 4; // Indicates SIB byte follows
         const ScaleMap: { [key: number]: number } = { 1: 0, 2: 1, 4: 2, 8: 3 };
         sib = {
+          // @ts-ignore
           scale: ScaleMap[memory_address.scale || 1],
           // Index=ESP is invalid, use 100b for 'none'
           index: index_register_value ? (index_register_value.code === 4 ? 4 : index_register_value.code) : 4,
