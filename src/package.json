@@ -16,5 +16,8 @@
   "license": "MIT",
   "dependencies": {
     "llvm.js": "^1.0.9"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10"
   }
 }
