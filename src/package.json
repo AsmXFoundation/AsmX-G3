@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "AsmX G3 (AsmX Generation 3) \n programming language",
   "main": "./kernel.js",
+  "bin": {
+    "asmx": "./bin/asmx"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "asmx": "node ./kernel.js",
