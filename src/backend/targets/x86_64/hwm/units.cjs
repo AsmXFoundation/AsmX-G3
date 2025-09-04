@@ -159,6 +159,7 @@ try {
     UnitTest.test('MOV EAX, 0x12345678', compiler.getSource(), Buffer.from([0xb8, 0x78, 0x56, 0x34, 0x12]));
     compiler.clearSource();
     // REX.W + B8+rd io: MOV r64, imm64 -> MOV RAX, 0x1122334455667788
+    // @ts-ignore
     compiler.compile('mov', [providetypes.parseReg('rax'), providetypes.parseImm((0x1122334455667788n))]);
     UnitTest.test('MOV RAX, 0x1122334455667788', compiler.getSource(), Buffer.from([0x48, 0xb8, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]));
     compiler.clearSource();

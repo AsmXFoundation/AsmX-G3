@@ -1,13 +1,4 @@
 "use strict";
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HardwareCompilerJournal = exports.HardwareCompiler = void 0;
 const fs_1 = require("fs");
@@ -247,39 +238,35 @@ class HardwareCompiler {
             this.dynSymEntries.push({ name: '', type: STT_NOTYPE });
         }
     }
-    useLibrary(name) {
-        return __awaiter(this, void 0, void 0, function* () {
-            this.enableDynamicLinking();
-            if (name === 'libc') {
-                const soname = 'libc.so.6';
-                if (!this.neededLibraries.includes(soname)) {
-                    this.neededLibraries.push(soname);
-                }
+    async useLibrary(name) {
+        this.enableDynamicLinking();
+        if (name === 'libc') {
+            const soname = 'libc.so.6';
+            if (!this.neededLibraries.includes(soname)) {
+                this.neededLibraries.push(soname);
             }
-            else {
-                throw new Error(`Lib ${name} not supported`);
-            }
-        });
+        }
+        else {
+            throw new Error(`Lib ${name} not supported`);
+        }
     }
-    requireSymbol(name_1, libPrefix_1) {
-        return __awaiter(this, arguments, void 0, function* (name, libPrefix, type = STT_FUNC) {
-            if (libPrefix && libPrefix.toLowerCase() !== 'libc') {
-                throw new Error(`Lib prefix ${libPrefix} not supported`);
-            }
-            this.enableDynamicLinking();
-            if (!this.neededLibraries.includes('libc.so.6')) {
-                yield this.useLibrary('libc');
-            }
-            if (this.dynamicSymbols.has(name)) {
-                return;
-            }
-            // Just add to lists, sizes handled by dedicated build functions
-            const symIndex = this.dynSymEntries.length; // Calculate potential index position
-            this.dynSymEntries.push({ name, type });
-            // Offsets calculated in buildFinalDynSymData based on final index
-            this.dynamicSymbols.set(name, {
-                name, index: -1, pltOffset: undefined, gotOffset: undefined, type, binding: STB_GLOBAL
-            });
+    async requireSymbol(name, libPrefix, type = STT_FUNC) {
+        if (libPrefix && libPrefix.toLowerCase() !== 'libc') {
+            throw new Error(`Lib prefix ${libPrefix} not supported`);
+        }
+        this.enableDynamicLinking();
+        if (!this.neededLibraries.includes('libc.so.6')) {
+            await this.useLibrary('libc');
+        }
+        if (this.dynamicSymbols.has(name)) {
+            return;
+        }
+        // Just add to lists, sizes handled by dedicated build functions
+        const symIndex = this.dynSymEntries.length; // Calculate potential index position
+        this.dynSymEntries.push({ name, type });
+        // Offsets calculated in buildFinalDynSymData based on final index
+        this.dynamicSymbols.set(name, {
+            name, index: -1, pltOffset: undefined, gotOffset: undefined, type, binding: STB_GLOBAL
         });
     }
     //#endregion Library/Dynamic Linking Management
@@ -288,7 +275,7 @@ class HardwareCompiler {
         this.requireSection(".text" /* SectionName.TEXT */);
         this.internalEmitBytes(".text" /* SectionName.TEXT */, buffer); // Add the instruction bytes
         if (reloc) {
-            const copyRelocToPush = Object.assign({}, reloc);
+            const copyRelocToPush = { ...reloc };
             this.relocations.push(copyRelocToPush);
         }
     }
@@ -527,7 +514,6 @@ class HardwareCompiler {
         // Process symbols added by the user (like 'message_symbol')
         HardwareCompilerJournal.success(2, `[buildFinalSymtabData] Starting local symbol loop (using forEach). Map size: ${this.localSymbols.size}`);
         this.localSymbols.forEach((sym, name) => {
-            var _a, _b;
             // Log every iteration start
             HardwareCompilerJournal.success(3, `  [buildFinalSymtabData] FOREACH ITERATION: name='${name}', type=${sym.type}, sectionName='${sym.sectionName}', index=${sym.index}`);
             // Skip the SECTION symbols we just created in the loop above
@@ -560,8 +546,8 @@ class HardwareCompiler {
             entry.writeUInt8((STB_LOCAL << 4) | (sym.type & 0xf), 4); // st_info: Binding=LOCAL, Type=provided type (e.g., OBJECT)
             entry.writeUInt8(0, 5); // st_other: Visibility=DEFAULT
             entry.writeUInt16LE(sectionIdx, 6); // st_shndx: Index of the section containing this symbol
-            entry.writeBigUInt64LE(BigInt((_a = sym.offset) !== null && _a !== void 0 ? _a : 0), 8); // st_value: Relative offset *within* the section
-            entry.writeBigUInt64LE(BigInt((_b = sym.size) !== null && _b !== void 0 ? _b : 0), 16); // st_size: Size of the symbol data
+            entry.writeBigUInt64LE(BigInt(sym.offset ?? 0), 8); // st_value: Relative offset *within* the section
+            entry.writeBigUInt64LE(BigInt(sym.size ?? 0), 16); // st_size: Size of the symbol data
             finalEntries.push(entry);
             symbolIndexCounter++; // Increment for the next symbol
         });
@@ -1152,7 +1138,6 @@ class HardwareCompiler {
         const pltSection = this.sectionsRequired.has(".plt" /* SectionName.PLT */) ? this.getSection(".plt" /* SectionName.PLT */) : null;
         const gotPltSection = this.sectionsRequired.has(".got.plt" /* SectionName.GOT_PLT */) ? this.getSection(".got.plt" /* SectionName.GOT_PLT */) : null;
         this.relocations.forEach(reloc => {
-            var _a;
             if (reloc.section !== ".text" /* SectionName.TEXT */) {
                 return; // Only process .text relocations here
             }
@@ -1214,7 +1199,7 @@ class HardwareCompiler {
                         throw new Error(`Section name missing for local symbol ${reloc.symbolName}`);
                     }
                     const targetSection = this.getSection(symbolInfo.sectionName);
-                    targetAddr = BigInt(targetSection.address + ((_a = symbolInfo.offset) !== null && _a !== void 0 ? _a : 0));
+                    targetAddr = BigInt(targetSection.address + (symbolInfo.offset ?? 0));
                     // Formula: Target - (PatchLocation + 4) + Addend
                     value = Number(targetAddr - (patchAddr + BigInt(4)) + addend);
                     HardwareCompilerJournal.success(2, `  Patching PC32 for ${reloc.symbolName}: Offset=0x${patchOffset.toString(16)}, PatchAddr=0x${patchAddr.toString(16)}, Target=0x${targetAddr.toString(16)}, Value=0x${(value >>> 0).toString(16)} (${value})`);

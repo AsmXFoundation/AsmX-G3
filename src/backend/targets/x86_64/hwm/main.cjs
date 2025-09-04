@@ -201,16 +201,16 @@ class HardwareMachineFactoryEncoder {
             HardwareMachineFactoryExceptionJournal.throw("ModR/M encoding error: Missing ModRM.reg definition (opcode extension).");
         }
         // Determine ModR/M 'mod' and 'r/m' fields (and potentially SIB/Displacement)
-        if ((FirstOperandOfRmEncountered === null || FirstOperandOfRmEncountered === void 0 ? void 0 : FirstOperandOfRmEncountered.type) === header_cjs_1.OperandType.Reg) {
+        if (FirstOperandOfRmEncountered?.type === header_cjs_1.OperandType.Reg) {
             // Direct register addressing
             modrm.mod = 3;
             const rmRegisterReport = RegisterDB.get(FirstOperandOfRmEncountered.value);
             if (!rmRegisterReport) {
                 HardwareMachineFactoryExceptionJournal.throw(`Unknown register for ModRM.rm: ${FirstOperandOfRmEncountered.value}`);
             }
-            modrm.rm = rmRegisterReport === null || rmRegisterReport === void 0 ? void 0 : rmRegisterReport.code;
+            modrm.rm = rmRegisterReport?.code;
         }
-        else if ((FirstOperandOfRmEncountered === null || FirstOperandOfRmEncountered === void 0 ? void 0 : FirstOperandOfRmEncountered.type) === header_cjs_1.OperandType.Mem) {
+        else if (FirstOperandOfRmEncountered?.type === header_cjs_1.OperandType.Mem) {
             // Memory addressing
             const memory_address = FirstOperandOfRmEncountered.value;
             /**
@@ -226,11 +226,12 @@ class HardwareMachineFactoryEncoder {
              * RSP/R12 always require SIB
              * Check if base is ESP/RSP or R12/R12D etc.
              */
-            const is_needs_byteSIB = (base_register_value === null || base_register_value === void 0 ? void 0 : base_register_value.code) === 4;
+            const is_needs_byteSIB = base_register_value?.code === 4;
             if (index_register_value || is_needs_byteSIB) {
                 modrm.rm = 4; // Indicates SIB byte follows
                 const ScaleMap = { 1: 0, 2: 1, 4: 2, 8: 3 };
                 sib = {
+                    // @ts-ignore
                     scale: ScaleMap[memory_address.scale || 1],
                     // Index=ESP is invalid, use 100b for 'none'
                     index: index_register_value ? (index_register_value.code === 4 ? 4 : index_register_value.code) : 4,
@@ -292,7 +293,7 @@ class HardwareMachineFactoryEncoder {
                             displacement = memory_address.displacement;
                         }
                     }
-                    else if ((base_register_value === null || base_register_value === void 0 ? void 0 : base_register_value.code) === 5) { // Base is EBP/RBP/R5/R13 requires disp8/disp32
+                    else if (base_register_value?.code === 5) { // Base is EBP/RBP/R5/R13 requires disp8/disp32
                         modrm.mod = 1; // Default to disp8 = 0
                         displacement = 0;
                     }
@@ -339,9 +340,8 @@ class HardwareMachineFactoryEncoder {
 }
 class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
     static getOperationSize(operands, variant) {
-        var _a;
         // Priority: Explicit size mode in variant
-        switch (variant === null || variant === void 0 ? void 0 : variant.operationSizeMode) {
+        switch (variant?.operationSizeMode) {
             // switch (variant?.operationSizeMode) {
             case 'ExplicitByte': return header_cjs_1.OperandSize.Byte;
             case 'ExplicitWord': return header_cjs_1.OperandSize.Word;
@@ -351,7 +351,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                 {
                     const implicitOperandTmpl = variant.operands.find(operand => operand.isImplicit);
                     // Fixed implicit reg (e.g., 'al')
-                    if (implicitOperandTmpl === null || implicitOperandTmpl === void 0 ? void 0 : implicitOperandTmpl.implicitReg) {
+                    if (implicitOperandTmpl?.implicitReg) {
                         const RegisterReport = RegisterDB.get(implicitOperandTmpl.implicitReg);
                         if (RegisterReport)
                             return RegisterReport.size;
@@ -378,7 +378,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                 {
                     // Find the size of the first non-immediate, non-implicit operand
                     for (let i = 0; i < operands.length; ++i) {
-                        if (operands[i].type !== header_cjs_1.OperandType.Imm && !((_a = variant.operands[i]) === null || _a === void 0 ? void 0 : _a.isImplicit)) {
+                        if (operands[i].type !== header_cjs_1.OperandType.Imm && !variant.operands[i]?.isImplicit) {
                             return operands[i].size;
                         }
                     }
@@ -397,7 +397,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                             // How to decide between Dword/Qword based on imm32? Needs REX.W knowledge.
                             // The variant matching should have picked the right one. Let's trust the variant.
                             const implicitTmpl = variant.operands.find(operand => operand.isImplicit);
-                            if ((implicitTmpl === null || implicitTmpl === void 0 ? void 0 : implicitTmpl.size) && !Array.isArray(implicitTmpl.size)) {
+                            if (implicitTmpl?.size && !Array.isArray(implicitTmpl.size)) {
                                 return implicitTmpl.size; // Trust template
                             }
                         }
@@ -425,10 +425,10 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                     HardwareMachineFactoryExceptionJournal.throw(`Unknown register: ${register}`);
                 }
                 // Check for high bytes (AH, CH, DH, BH) - special handling needed if REX is present
-                if ((registerReport === null || registerReport === void 0 ? void 0 : registerReport.highByte) && rex.needed) {
+                if (registerReport?.highByte && rex.needed) {
                     HardwareMachineFactoryExceptionJournal.throw(`Cannot use high byte register (${register}) when REX prefix is required.`);
                 }
-                if ((registerReport === null || registerReport === void 0 ? void 0 : registerReport.highByte) && opSize !== header_cjs_1.OperandSize.Byte) {
+                if (registerReport?.highByte && opSize !== header_cjs_1.OperandSize.Byte) {
                     HardwareMachineFactoryExceptionJournal.throw(`High byte register (${register}) can only be used in byte operations.`);
                 }
                 // Check for SIL, DIL, SPL, BPL - require REX regardless of other operands if used as byte register
@@ -436,7 +436,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                     rex.needed = true; // Force REX prefix just by using these registers
                 }
                 // Check for extended registers (R8-R15 or their parts)
-                if (registerReport === null || registerReport === void 0 ? void 0 : registerReport.requiresRex) {
+                if (registerReport?.requiresRex) {
                     rex.needed = true;
                     if (operandReport.encoding === header_cjs_1.OperandEncoding.ModRM_Reg) {
                         rex.R = true;
@@ -453,14 +453,14 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                 const MemoryOperand = operand.value;
                 if (MemoryOperand.base) {
                     const registerReport = RegisterDB.get(MemoryOperand.base);
-                    if (registerReport === null || registerReport === void 0 ? void 0 : registerReport.requiresRex) {
+                    if (registerReport?.requiresRex) {
                         rex.needed = true;
                         rex.B = true;
                     }
                 }
                 if (MemoryOperand.index) {
                     const registerReport = RegisterDB.get(MemoryOperand.index);
-                    if (registerReport === null || registerReport === void 0 ? void 0 : registerReport.requiresRex) {
+                    if (registerReport?.requiresRex) {
                         rex.needed = true;
                         rex.X = true;
                     }
@@ -514,7 +514,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         this.source = Buffer.alloc(0);
     }
     match_any_group_registers_and_get_expected_register(registers, determinedOpSize) {
-        const matches = registers.filter((register) => { var _a; return ((_a = RegisterDB.get(register)) === null || _a === void 0 ? void 0 : _a.size) === determinedOpSize; });
+        const matches = registers.filter((register) => RegisterDB.get(register)?.size === determinedOpSize);
         if (matches.length === 1) {
             return matches[0];
         }
@@ -529,7 +529,6 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         return this.match_any_group_registers_and_get_expected_register(['rax', 'eax', 'ax', 'ah', 'al'], determinedOpSize);
     }
     findMatchingVariant(definition, operands) {
-        var _a, _b;
         const candidates = [];
         for (const variant of definition.variants) {
             if (variant.operands.length !== operands.length) {
@@ -559,8 +558,8 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                 case 'MatchImplicit':
                     {
                         const implicitTmpl = variant.operands.find(operand => operand.isImplicit);
-                        if (implicitTmpl === null || implicitTmpl === void 0 ? void 0 : implicitTmpl.implicitReg) {
-                            determinedOperandSize = ((_a = RegisterDB.get(implicitTmpl.implicitReg)) === null || _a === void 0 ? void 0 : _a.size) || null;
+                        if (implicitTmpl?.implicitReg) {
+                            determinedOperandSize = RegisterDB.get(implicitTmpl.implicitReg)?.size || null;
                         }
                         // If family or no specific reg, try inferring from first op later
                         break;
@@ -570,8 +569,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                 default:
                     {
                         const FirstOperandOfRegisterMemoryEncountered = operands.find((operand, i) => {
-                            var _a;
-                            return operand.type !== header_cjs_1.OperandType.Imm && !((_a = variant.operands[i]) === null || _a === void 0 ? void 0 : _a.isImplicit);
+                            return operand.type !== header_cjs_1.OperandType.Imm && !variant.operands[i]?.isImplicit;
                         });
                         if (FirstOperandOfRegisterMemoryEncountered) {
                             determinedOperandSize = FirstOperandOfRegisterMemoryEncountered.size;
@@ -602,7 +600,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                     let expectedSize = determinedOperandSize; // Start with determined size
                     if (tmpl.implicitReg) {
                         expectedReg = tmpl.implicitReg;
-                        expectedSize = ((_b = RegisterDB.get(expectedReg)) === null || _b === void 0 ? void 0 : _b.size) || null;
+                        expectedSize = RegisterDB.get(expectedReg)?.size || null;
                     }
                     else if (variant.implicitRegFamily != undefined) {
                         const match = [
@@ -745,7 +743,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         if (implicitOperand && implicitOperand.type === header_cjs_1.OperandType.Reg) {
             const specificImplicitMatch = candidates.find(variant => {
                 const tmpl = variant.operands.find(operand => operand.isImplicit);
-                return (tmpl === null || tmpl === void 0 ? void 0 : tmpl.implicitReg) === implicitOperand.value.toLowerCase();
+                return tmpl?.implicitReg === implicitOperand.value.toLowerCase();
             });
             if (specificImplicitMatch) {
                 return specificImplicitMatch;
@@ -804,8 +802,8 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         // --- Add Opcode ---
         // --- Handle OpcodeReg encoding ---
         // buffers.push(Buffer.from([variant?.opcode] as any));
-        let finalOpcode = variant === null || variant === void 0 ? void 0 : variant.opcode[0];
-        const opcodeRegOperandIndex = variant === null || variant === void 0 ? void 0 : variant.operands.findIndex(op => op.encoding === header_cjs_1.OperandEncoding.OpcodeReg);
+        let finalOpcode = variant?.opcode[0];
+        const opcodeRegOperandIndex = variant?.operands.findIndex(op => op.encoding === header_cjs_1.OperandEncoding.OpcodeReg);
         if (opcodeRegOperandIndex !== -1) {
             const regOperand = operands[opcodeRegOperandIndex];
             const regInfo = RegisterDB.get(regOperand.value);
@@ -818,7 +816,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         // --- Encode ModR/M, SIB, Displacement ---
         let immediateValue = null;
         let immediateSize = null;
-        const needModRM = variant === null || variant === void 0 ? void 0 : variant.operands.some(operand => {
+        const needModRM = variant?.operands.some(operand => {
             return operand.encoding === header_cjs_1.OperandEncoding.ModRM_Reg || operand.encoding === header_cjs_1.OperandEncoding.ModRM_RM;
         });
         if (needModRM) {
@@ -841,17 +839,17 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                 }
             }
         }
-        const immediateOperandEncountered = variant === null || variant === void 0 ? void 0 : variant.operands.find(operand => operand.encoding === header_cjs_1.OperandEncoding.Immediate);
+        const immediateOperandEncountered = variant?.operands.find(operand => operand.encoding === header_cjs_1.OperandEncoding.Immediate);
         if (immediateOperandEncountered) {
-            const immediateOperand = operands.find((_, i) => (variant === null || variant === void 0 ? void 0 : variant.operands[i].encoding) === header_cjs_1.OperandEncoding.Immediate);
+            const immediateOperand = operands.find((_, i) => variant?.operands[i].encoding === header_cjs_1.OperandEncoding.Immediate);
             if (!immediateOperand || typeof immediateOperand.value !== 'number') {
                 HardwareMachineFactoryExceptionJournal.throw(`Immediate operand expected but not found or invalid.`);
             }
-            immediateValue = immediateOperand === null || immediateOperand === void 0 ? void 0 : immediateOperand.value;
+            immediateValue = immediateOperand?.value;
             // Determine the size the immediate *will be encoded as* based on the variant rules
-            immediateSize = (variant === null || variant === void 0 ? void 0 : variant.fixedImmediateSize) || header_cjs_1.OperandSize.Byte; // Default assumption if not specified
+            immediateSize = variant?.fixedImmediateSize || header_cjs_1.OperandSize.Byte; // Default assumption if not specified
             // Validate provided immediate value against the expected size/type
-            switch (variant === null || variant === void 0 ? void 0 : variant.immediateType) {
+            switch (variant?.immediateType) {
                 case 'SignExtendedByte':
                     if (!IntegerTypes.isSigned8Bit(immediateValue)) {
                         HardwareMachineFactoryExceptionJournal.throw(`Immediate value ${immediateValue} does not fit in a sign-extended byte for this instruction variant.`);
@@ -873,7 +871,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                 case 'Standard':
                 default:
                     // Use the size determined by the parser, ensure it's compatible with template `size` array
-                    immediateSize = immediateOperand === null || immediateOperand === void 0 ? void 0 : immediateOperand.size;
+                    immediateSize = immediateOperand?.size;
                     const allowedSizes = Array.isArray(immediateOperandEncountered.size) ? immediateOperandEncountered.size : [immediateOperandEncountered.size];
                     if (immediateOperandEncountered.size && !allowedSizes.includes(immediateSize)) {
                         HardwareMachineFactoryExceptionJournal.throw(`Provided immediate size ${immediateSize} not allowed by variant template.`);
