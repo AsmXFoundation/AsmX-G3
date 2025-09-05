@@ -1,7 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AssemblyInstructionDescriptorTable = void 0;
 const header_cjs_1 = require("../header.cjs");
+const fs_1 = __importDefault(require("fs"));
 class AssemblyInstructionDescriptorTable {
     static defineInstructions() {
         // Instruction array: [mnemonic, base opcode]
@@ -423,6 +427,13 @@ class AssemblyInstructionDescriptorTable {
     }
     static getInstructionSet() {
         return this.instructionSet;
+    }
+    static exportToJSON(_path) {
+        let iset = {};
+        for (const [key, value] of this.instructionSet) {
+            iset = { ...iset, [key]: value };
+        }
+        fs_1.default.writeFileSync(_path, JSON.stringify(iset, null, 2));
     }
 }
 exports.AssemblyInstructionDescriptorTable = AssemblyInstructionDescriptorTable;

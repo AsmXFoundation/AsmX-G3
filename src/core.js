@@ -13,22 +13,22 @@ class Core {
     src = path.join(process.cwd(), originalSrc);
 
     Server.init();
-    Server.journal.success(`Building core`);
-    Server.journal.info(`Current directory workspace: ${parameters?.hinfo ? '*'.repeat(path.dirname(src).length) : path.dirname(src)}`);
-    Server.journal.info(`File ${parameters?.hinfo ? '*'.repeat(src.length) : src} ${fs.existsSync(src) ? 'exists' : 'does not exist'}`);
+    Server.journal.success(`Building core`, 'jitc');
+    Server.journal.info(`Current directory workspace: ${parameters?.hinfo ? '*'.repeat(path.dirname(src).length) : path.dirname(src)}`, 'jitc');
+    Server.journal.info(`File ${parameters?.hinfo ? '*'.repeat(src.length) : src} ${fs.existsSync(src) ? 'exists' : 'does not exist'}`, 'jitc');
 
     Router.setIndexFile(src);
     Router.setRouteImportDirectory(path.dirname(src));
 
     if (fs.existsSync(src)) {
-      Server.journal.process(`Building llvm.js ...`);
+      Server.journal.process(`Building llvm.js ...`, 'jitc');
       llvm.Config.setCommentLine(';;');
       llvm.Config.setCommentBlock('/*');
       llvm.Keywords.put('extends', 'as');
       llvm.Tokens.put({ name: 'ARROW', lexem: '->' });
       llvm.Tokens.put({ name: 'SCOPE', lexem: '::' });
       llvm.Tokens.put({ name: 'OPTIONAL_CHAIN', lexem: '?.' });
-      Server.journal.success(`llvm.js built`);
+      Server.journal.success(`llvm.js built`, 'jitc');
 
       let tokens = new llvm.Lexer().lexer(fs.readFileSync(src).toString('utf8').split('\n'));
       tokens = tokens.filter(tree => !['WHITESPACE', 'COMMENT', 'COMMENT_BODY', 'SPACE'].includes(tree.type));
@@ -38,9 +38,9 @@ class Core {
       tokens = Transformer.transform(tokens);
       const ast = new RecursiveDescentParser(parameters?.compilation_mode).parser(tokens);
       
-      Server.journal.success(`Core built`);
+      Server.journal.success(`Core built`, 'jitc');
       new IntermediateRepresentationCompiler(ast);
-      Server.journal.success(`Core executed`);
+      Server.journal.success(`Core executed`, 'jitc');
     }
   }
 }

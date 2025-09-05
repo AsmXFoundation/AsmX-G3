@@ -28,7 +28,7 @@
 // fs.writeFileSync(dest1Path, source1Content);
 // fs.writeFileSync(dest2Path, source2Content);
 
-// console.log('Successfully installed the AsmX G2!');
+// console.log('Successfully installed the AsmX G3!');
 
 // const fs = require('fs');
 // const path = require('path');

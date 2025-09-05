@@ -1,4 +1,4 @@
-### **Changelog: rev 2.0**
+### **Changelog: v28.0.0 rev 2.0**
 
 This release introduces a critical stability fix for the compiler and expands the supported `amd64` instruction set. The revision is updated from `1.0` to `2.0` to reflect these significant improvements.
 

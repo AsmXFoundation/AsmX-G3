@@ -12,6 +12,8 @@ import {
   InstructionNameTags
 } from "../header.cjs";
 
+import fs from "fs";
+
 export class AssemblyInstructionDescriptorTable {
   private static instructionSet: Map<string, InstructionDefinition> = new Map();
 
@@ -443,5 +445,13 @@ export class AssemblyInstructionDescriptorTable {
 
   public static getInstructionSet(): Map<string, InstructionDefinition> {
     return this.instructionSet;
+  }
+
+  public static exportToJSON(_path: string): void {
+    let iset = {};
+    for (const [key, value] of this.instructionSet) {
+      iset = { ...iset, [key]: value };
+    }
+    fs.writeFileSync(_path, JSON.stringify(iset, null, 2));
   }
 }

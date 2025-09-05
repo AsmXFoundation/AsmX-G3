@@ -25,7 +25,7 @@ class tapi {
 
     for (const behavior of filtred) {
       if (Reflect.ownKeys(this.parameters).some(param => behavior.names.includes(param))) {
-        behavior.func();
+        behavior.func(this.parameters);
         if (callback_it) callback_it();
       }
     }
@@ -39,28 +39,30 @@ class tapi {
       let value = parameters[idx];
 
       if (value.startsWith('-')) {
+        const flagName = value.replace(/^-+/, '').replace(/-/g, '_');
+        
         if (idx + 1 == parameters.length || parameters[idx + 1].startsWith('-')) {
-          if (this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]) {
-            params_raw[this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]] = true;
+          if (this.alias_flags[flagName]) {
+            params_raw[this.alias_flags[flagName]] = true;
           } else {
-            params_raw[value.slice(value.lastIndexOf('-') + 1)] = true;
+            params_raw[flagName] = true;
           }
           
           idx += 1;
         } else {
-          if (this.single_flags.includes(value.slice(value.lastIndexOf('-') + 1))) {
-            if (this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]) {
-              params_raw[this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]] = true;
+          if (this.single_flags.includes(flagName)) {
+            if (this.alias_flags[flagName]) {
+              params_raw[this.alias_flags[flagName]] = true;
             } else {
-              params_raw[value.slice(value.lastIndexOf('-') + 1)] = true;
+              params_raw[flagName] = true;
             }
 
             idx += 1;
           } else {
-            if (this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]) {
-              params_raw[this.alias_flags[value.slice(value.lastIndexOf('-') + 1)]] = parameters[idx + 1];
+            if (this.alias_flags[flagName]) {
+              params_raw[this.alias_flags[flagName]] = parameters[idx + 1];
             } else {
-              params_raw[value.slice(value.lastIndexOf('-') + 1)] = parameters[idx + 1];
+              params_raw[flagName] = parameters[idx + 1];
             }
 
             idx += 2;
@@ -77,28 +79,53 @@ class tapi {
   }
 
   static is_flags(parameters, flags) {
+    flags = flags.map(flag => flag.replace(/^-+/, '').replace(/-/g, '_'));
     return flags.map(flag => parameters.includes(flag)).some(Boolean);
   }
 
   static bind_exit_flags(names, func) {
+    names = names.map(name => name.replace(/^-+/, '').replace(/-/g, '_'));
     this.bind_behavior.push({ names, func, type: this.type_place.exit_flag });
   }
 
   static bind_single_flags(...names) {
+    names = names.map(name => name.replace(/^-+/, '').replace(/-/g, '_'));
     this.bind_behavior.push({ names, type: this.type_place.single_flag });
     this.single_flags.push(...names);
   }
 
   static bind_func(names, func) {
+    names = names.map(name => name.replace(/^-+/, '').replace(/-/g, '_'));
     this.bind_behavior.push({ names, func, type: this.type_place.func });
   }
   
   static bind_pair_flags(...names) {
+    names = names.map(name => name.replace(/^-+/, '').replace(/-/g, '_'));
     this.bind_behavior.push({ names, type: this.type_place.pair_flag });
   }
 
   static bind_alias_flag(alias, flag) {
+    flag = flag.replace(/^-+/, '').replace(/-/g, '_');
     this.alias_flags[alias] = flag;
+  }
+
+  static clean_long_flag(flag) {
+    flag = flag.replace(/^-+/, '').replace(/-/g, '_');
+    return flag;
+  }
+
+  static abstract_pipeline_factory(_arguments, _throw_bool) {
+    for (const _arg of Reflect.ownKeys(_arguments))
+      if (!new Set([...this.bind_behavior.map(box => box?.names || []).flat(), ...Reflect.ownKeys(this.alias_flags), 'default']).has(_arg)) return (_throw_bool ? false : _arg);
+    return true;
+  }
+
+  static check_pipeline_factory(_arguments) {
+    return this.abstract_pipeline_factory(_arguments, true);
+  }
+
+  static get_bad_iter_from_pipeline_factory(_arguments) {
+    return this.abstract_pipeline_factory(_arguments, false);
   }
 }
 
