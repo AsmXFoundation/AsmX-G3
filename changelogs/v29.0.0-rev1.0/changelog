@@ -1,0 +1,40 @@
+# Changelog v29.0.0-rev1.0
+
+## Overview
+This release introduces significant innovations in packaging, installation, and compiler usability for AsmX-G3. Key focuses include native support for Linux packaging formats, enhanced target specification, new export capabilities, and utilities for compression and file handling. These changes enable easier distribution, better cross-platform compatibility, and improved developer workflows. No breaking changes or bug fixes were identified in this release, emphasizing forward-looking enhancements.
+
+## New Features
+- **Arch Linux Installation Support**: Added dedicated installation methods for Arch Linux users. Users can now install via AUR using `yay -S asmx-g3-git` or manually with `npm install --ignore-scripts` followed by global installation. This streamlines onboarding for Arch-based distributions.
+- **Compiler Aliases Display**: Introduced the `-a` / `--aliases` option to display all compiler aliases, improving discoverability and usability for custom command shortcuts.
+- **Instruction Set Export**: Added `--export-json-isa` option to export the instruction set architecture (ISA) to a JSON file, enabling easier integration with external tools, analysis, or documentation generation.
+- **Packaging System**: Implemented a comprehensive packaging pipeline with the `--package` command. This allows creating distributable packages from compiled executables. Supported formats include deb (via `--package-type`). Additional customization options:
+  - `--package-name`: Sets the package name (defaults to executable name).
+  - `--package-version`: Specifies the version (defaults to 1.0.0).
+  - `--package-description`: Adds a package description.
+  - `--package-author`: Defines the package maintainer/author.
+  - `--package-icon`: Provides a path to an icon file.
+  - `--package-desktop`: Enables/disables desktop entry creation.
+  This innovation transforms AsmX-G3 into a full-fledged build-and-package tool, ideal for deploying applications across Linux ecosystems.
+- **Gzip Compression Module**: Added `src/compress/gzip.js` and `src/compress/gzip.ts` for built-in gzip compression and decompression. This supports efficient file archiving, particularly useful in packaging workflows or handling compressed assets.
+- **File System Utilities**: Introduced `src/utils/fs-utils.js` with helper functions for file operations, such as reading/writing, directory management, and path resolution. This enhances internal handling for installation, packaging, and runtime file interactions.
+- **Update Command**: Added `--update` command to automatically update the AsmX compilation platform, ensuring users can easily pull the latest versions without manual intervention.
+
+## Enhancements
+- **Target Specification Overhaul**: Replaced `-m` / `--march` with `-t` / `--target` for specifying CPU architectures (e.g., `--target amd64`). This aligns with modern compiler conventions, improves clarity, and prepares for more granular target triples in future releases.
+- **LLVM Option Renaming**: Updated LLVM-related flags for consistency and simplicity:
+  - `--llvm@version` → `--llvm-version` (displays LLVM version card).
+  - `--llvm@dumpversion` → `--llvm-dumpversion` (displays LLVM version).
+  - `--llvm@repository` → `--llvm-repository` (displays LLVM repository).
+  This removes special characters, making options easier to type and script.
+- **Usage Examples Expansion**: Updated README.md with new examples demonstrating `--target` and packaging workflows, such as `asmx main --release --target amd64 -o myapp --package --package-type deb --package-name my-application --package-version 1.0.0`.
+- **Changelog Organization**: Renamed and restructured changelogs into versioned directories (e.g., `changelogs/v28.0.0-rev2.0/changelog`), improving version tracking and repository cleanliness.
+
+## Bug Fixes
+- No bug fixes in this release. The focus was on new capabilities and refinements.
+
+## Notable Changes to Behavior, Performance, or Compatibility
+- **Behavior**: Packaging introduces post-compilation steps, which may extend build times but enable one-command deployment. The `--target` change requires updating scripts from `--march`; however, backward compatibility is maintained where possible.
+- **Performance**: Gzip integration and FS utilities optimize file operations in packaging, potentially reducing I/O overhead in large projects. No measurable regressions noted.
+- **Compatibility**: Enhanced support for Arch Linux and new targets like amd64 improves cross-distro compatibility. No breaking changes to existing workflows, but users should verify scripts with renamed options.
+
+This release marks a pivotal step toward making AsmX-G3 a versatile, production-ready assembler for modern development.
