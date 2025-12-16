@@ -40,20 +40,32 @@ class TypeChecker {
     }
   }
 
+  // static str_unwrap(expression) {
+  //   if (Array.isArray(expression)) {
+  //     return this.str_unwrap(expression[0]);
+  //   } else {
+  //     if (expression instanceof Expression) {
+  //       return this.str_unwrap(expression.body.string);
+  //     } else if (expression.type == TypeOfToken.STRING) {
+  //       return this.interpretEscapeSequences(expression.lexem.slice(1, -1));
+  //     }
+  //   }
+  // }
+
   static str_unwrap(expression) {
     if (Array.isArray(expression)) {
       return this.str_unwrap(expression[0]);
     } else {
       if (expression instanceof Expression) {
-        return this.str_unwrap(expression.body.string);
+        return expression.body.string.lexem;
       } else if (expression.type == TypeOfToken.STRING) {
-        return this.interpretEscapeSequences(expression.lexem.slice(1, -1));
+        return expression.lexem;
       }
     }
   }
 
   static interpretEscapeSequences(rawString) {
-    const simpleEscapeMap = {'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', '"': '"', "'": "'"};
+    const simpleEscapeMap = { 'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', '"': '"', "'": "'" };
 
     // ([ntr\\"']) - Group 1: Captures one of the simple characters.
     // x([0-9a-fA-F]{2}) - Group 2: Captures the two hexadecimal digits after \x.
@@ -71,7 +83,7 @@ class TypeChecker {
         const charCode = parseInt(code, 16); // 16-digit string to number
         return String.fromCodePoint(charCode);
       }
-      
+
       return match;
     });
   }

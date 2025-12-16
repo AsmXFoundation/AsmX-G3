@@ -2,12 +2,16 @@ import {
   HardwareMachineFactory,
   HardwareMachineFactoryParserOpernadType
 } from "./main.cjs";
-import { AssemblyInstructionDescriptorTable } from "./tbl.cjs";
+// import AssemblyInstructionDescriptorTable from "./tbl.cjs";
 import {
   OperandSize,
   InstructionDefinition,
-  Operand
+  Operand,
+  OperandType,
+  AssemblyInstructionDescriptorTableBase
 } from "../header.cjs";
+
+const AssemblyInstructionDescriptorTable = require("./tbl.cjs");
 
 const idt = AssemblyInstructionDescriptorTable;
 const providetypes = HardwareMachineFactoryParserOpernadType;
@@ -18,24 +22,34 @@ compiler.setInstructionSet(idt.getInstructionSet() as any);
 console.log("ISA AMD64 sizeof: ", compiler.size);
 
 class UnitTest {
+  public static pass: number = 0;
+  public static fail: number = 0;
+
   public static test(message: string, actual: Buffer, expected: Buffer): void {
     console.log(`Testing: ${message}`);
+    console.log(`Expected: ${expected.toString('hex')}`);
+    console.log(`Actual:   ${actual.toString('hex')}`);
 
     if (actual.equals(expected)) {
       console.log(`[1m[32m✔ PASS[0m`);
+      this.pass++;
     } else {
       console.log(`[1m[41m✘ FAIL[0m`);
+      this.fail++;
     }
 
-    console.log(`Expected: ${expected.toString('hex')}`);
-    console.log(`Actual: ${actual.toString('hex')}`);
     console.log('---'.repeat(20));
+  }
+
+  public static summary(): void {
+    console.log(`${this.fail} tests failed, ${this.pass} tests passed.`);
   }
 }
 
-try {
-  console.log("--- Examples ---");
-
+// { add: [ operands: ['cl', 'al'], expected: [0x00, 0xc1] ] }
+function test_add() {
+  console.log("\n--- ADD Tests ---");
+  
   // ADD CL, AL  (Opcode 00 /r -> ModRM: mod=3, reg=AL(0), rm=CL(1)) -> 00 C1
   compiler.compile('add', [providetypes.parseReg('cl') as Operand, providetypes.parseReg('al') as Operand]);
   UnitTest.test('ADD CL, AL', compiler.getSource(), Buffer.from([0x00, 0xc1]));
@@ -97,12 +111,6 @@ try {
   UnitTest.test('ADD r15, 1', compiler.getSource(), Buffer.from([0x49, 0x83, 0xC7, 0x01]));
   compiler.clearSource();
 
-
-  // OR EAX, EBX (Opcode 09 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 09 D8
-  compiler.compile('or', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
-  UnitTest.test('OR EAX, EBX', compiler.getSource(), Buffer.from([0x09, 0xD8]));
-  compiler.clearSource();
-
   // ADD eax, edx
   // Result: 01 D0
   compiler.compile('add', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('edx') as Operand]);
@@ -114,36 +122,9 @@ try {
   compiler.compile('add', [providetypes.parseReg('rax') as Operand, providetypes.parseReg('r15') as Operand]);
   UnitTest.test('ADD RAX, R15', compiler.getSource(), Buffer.from([0x4C, 0x01, 0xF8]));
   compiler.clearSource();
+}
 
-
-
-  // AND EAX, EBX (Opcode 21 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 21 D8
-  compiler.compile('and', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
-  UnitTest.test('AND EAX, EBX', compiler.getSource(), Buffer.from([0x21, 0xD8]));
-  compiler.clearSource();
-
-  // SUB EAX, EBX (Opcode 29 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 29 D8
-  compiler.compile('sub', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
-  UnitTest.test('SUB EAX, EBX', compiler.getSource(), Buffer.from([0x29, 0xD8]));
-  compiler.clearSource();
-
-  // XOR EAX, EBX (Opcode 31 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 31 D8
-  compiler.compile('xor', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
-  UnitTest.test('XOR EAX, EBX', compiler.getSource(), Buffer.from([0x31, 0xD8]));
-  compiler.clearSource();
-
-  // CMP EAX, EBX (Opcode 39 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 39 D8
-  compiler.compile('cmp', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
-  UnitTest.test('CMP EAX, EBX', compiler.getSource(), Buffer.from([0x39, 0xD8]));
-  compiler.clearSource();
-
-  // CMP ECX, R8D (Opcode 44 39 /r -> ModRM: mod=3, reg=R8D(1), rm=ECX(1)) -> 44 39 C1
-  compiler.compile('cmp', [providetypes.parseReg('ecx') as Operand, providetypes.parseReg('r8d') as Operand]);
-  UnitTest.test('CMP ecx, r8d', compiler.getSource(), Buffer.from([0x44, 0x39, 0xC1]));
-  compiler.clearSource();
-
-  // --- MOV Tests ---
-  //#region MOV Tests
+function test_mov() {
   console.log("\n--- MOV Tests ---");
 
   // 88 /r: MOV r/m8, r8  -> MOV DL, AL
@@ -242,13 +223,116 @@ try {
   UnitTest.test('MOV rdi, 1', compiler.getSource(), Buffer.from([0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00]));
   compiler.clearSource();
 
-  
   // C7 /0 ib: MOV r64, imm64 -> MOV rdx, 13
   compiler.compile('mov', [providetypes.parseReg('rdx') as Operand, providetypes.parseImm(13)]);
   UnitTest.test('MOV rdx, 13', compiler.getSource(), Buffer.from([0x48, 0xc7, 0xc2, 0x0d, 0x00, 0x00, 0x00]));
   compiler.clearSource();
-  //#endregion MOV Tests
+}
 
+function test_push() {
+  console.log("--- PUSH Tests ---");
+
+  // at&t prefixes:
+  // b = byte (8 bit)
+  // s = short (16 bit integer) or single (32-bit floating point)
+  // w = word (16 bit)
+  // l = long (32 bit integer or 64-bit floating point)
+  // q = quad (64 bit)
+  // t = ten bytes (80-bit floating point)
+
+  compiler.compile('push', [ providetypes.parseReg('rax') as Operand]);
+  UnitTest.test('push %rax', compiler.getSource(), Buffer.from([0x50]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseReg('eax') as Operand]);
+  UnitTest.test('push %eax', compiler.getSource(), Buffer.from([0x50]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseReg('ax') as Operand]);
+  UnitTest.test('push %ax', compiler.getSource(), Buffer.from([0x66, 0x50]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseReg('r15') as Operand]);
+  UnitTest.test('push %r15', compiler.getSource(), Buffer.from([0x41, 0x57]));
+  compiler.clearSource();
+
+  compiler.compile('push', [{ type: OperandType.Imm, size: OperandSize.Dword, value: 0x1234 } ]);
+  UnitTest.test('push $0x1234 (imm32)', compiler.getSource(), Buffer.from([0x68, 0x34, 0x12, 0x00, 0x00]));
+  compiler.clearSource();
+
+  compiler.compile('push', [{ type: OperandType.Imm, size: OperandSize.Word, value: 0x1234 } ]);
+  UnitTest.test('pushw $0x1234 (imm16)', compiler.getSource(), Buffer.from([0x66, 0x68, 0x34, 0x12]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseImm(5) ]);
+  UnitTest.test('push $5 (imm8)', compiler.getSource(), Buffer.from([0x6A, 0x05]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseReg('rbx') as Operand]);
+  UnitTest.test('push %rbx (r/m64)', compiler.getSource(), Buffer.from([0x53]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseMem({ size: OperandSize.Qword, base: 'rbx' }) ]);
+  UnitTest.test('push (%rbx)', compiler.getSource(), Buffer.from([0xff, 0x33]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseMem({ size: OperandSize.Dword, base: 'ebx' }) ]);
+  UnitTest.test('push (%ebx)', compiler.getSource(), Buffer.from([0x67, 0xff, 0x33]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseSreg('fs') as Operand]);
+  UnitTest.test(' push   %fs', compiler.getSource(), Buffer.from([0x0F, 0xA0]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseSreg('gs') as Operand]);
+  UnitTest.test('push   %gs', compiler.getSource(), Buffer.from([0x0F, 0xA8]));
+  compiler.clearSource();
+
+  compiler.compile('push', [ providetypes.parseReg('r8') as Operand]);
+  UnitTest.test('push %r8', compiler.getSource(), Buffer.from([0x41, 0x50]));
+  compiler.clearSource();
+
+  console.log(`\u001b[1m\u001b[32m\u2705 PUSH tests completed!\u001b[0m`);
+}
+
+try {
+  console.log("--- Examples ---");
+
+  test_add();
+
+  // OR EAX, EBX (Opcode 09 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 09 D8
+  compiler.compile('or', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
+  UnitTest.test('OR EAX, EBX', compiler.getSource(), Buffer.from([0x09, 0xD8]));
+  compiler.clearSource();
+
+  // AND EAX, EBX (Opcode 21 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 21 D8
+  compiler.compile('and', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
+  UnitTest.test('AND EAX, EBX', compiler.getSource(), Buffer.from([0x21, 0xD8]));
+  compiler.clearSource();
+
+  // SUB EAX, EBX (Opcode 29 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 29 D8
+  compiler.compile('sub', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
+  UnitTest.test('SUB EAX, EBX', compiler.getSource(), Buffer.from([0x29, 0xD8]));
+  compiler.clearSource();
+
+  // XOR EAX, EBX (Opcode 31 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 31 D8
+  compiler.compile('xor', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
+  UnitTest.test('XOR EAX, EBX', compiler.getSource(), Buffer.from([0x31, 0xD8]));
+  compiler.clearSource();
+
+  // CMP EAX, EBX (Opcode 39 /r -> ModRM: mod=3, reg=EBX(3), rm=EAX(0)) -> 39 D8
+  compiler.compile('cmp', [providetypes.parseReg('eax') as Operand, providetypes.parseReg('ebx') as Operand]);
+  UnitTest.test('CMP EAX, EBX', compiler.getSource(), Buffer.from([0x39, 0xD8]));
+  compiler.clearSource();
+
+  // CMP ECX, R8D (Opcode 44 39 /r -> ModRM: mod=3, reg=R8D(1), rm=ECX(1)) -> 44 39 C1
+  compiler.compile('cmp', [providetypes.parseReg('ecx') as Operand, providetypes.parseReg('r8d') as Operand]);
+  UnitTest.test('CMP ecx, r8d', compiler.getSource(), Buffer.from([0x44, 0x39, 0xC1]));
+  compiler.clearSource();
+
+  test_mov();
+  test_push();
+  UnitTest.summary();
   console.log(`[1m[32m✔ Successfully completed![0m`);
 } catch (e) {
   if (e instanceof Error) {
@@ -257,4 +341,3 @@ try {
     console.error("Unknown compilation error:", e);
   }
 }
-

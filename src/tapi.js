@@ -2,8 +2,15 @@
 class tapi {
   static bind_behavior = [];
   static single_flags = [];
+  static multi_flags = [];
   static alias_flags = {};
-  static type_place = { exit_flag: 'exf', func: 'fun', pair_flag: 'pfg', single_flag: 'sfg' };
+  static type_place = {
+    exit_flag: "exit_flag",
+    func: "function",
+    pair_flag: "pair_flag",
+    single_flag: "single_flag",
+    multiple_group_value: "multiple_group_value"
+  };
   static parameters = {};
 
   static exec(parameters) {
@@ -39,37 +46,36 @@ class tapi {
       let value = parameters[idx];
 
       if (value.startsWith('-')) {
-        const flagName = value.replace(/^-+/, '').replace(/-/g, '_');
+        let flagName = value.replace(/^-+/, '').replace(/-/g, '_');
+
+        if (this.alias_flags[flagName]) {
+          flagName = this.alias_flags[flagName];
+        }
+
+        const isNextFlag = idx + 1 == parameters.length || parameters[idx + 1].startsWith('-');
         
-        if (idx + 1 == parameters.length || parameters[idx + 1].startsWith('-')) {
-          if (this.alias_flags[flagName]) {
-            params_raw[this.alias_flags[flagName]] = true;
-          } else {
-            params_raw[flagName] = true;
-          }
-          
+        if (this.single_flags.includes(flagName) || (isNextFlag && !this.pair_flags_exist(flagName) && !this.multi_flags.includes(flagName))) {
+          params_raw[flagName] = true;
           idx += 1;
         } else {
-          if (this.single_flags.includes(flagName)) {
-            if (this.alias_flags[flagName]) {
-              params_raw[this.alias_flags[flagName]] = true;
-            } else {
-              params_raw[flagName] = true;
-            }
+          const paramValue = parameters[idx + 1];
 
-            idx += 1;
+          if (this.multi_flags.includes(flagName)) {
+            if (!Array.isArray(params_raw[flagName])) {
+              params_raw[flagName] = [];
+            }
+            params_raw[flagName].push(paramValue);
           } else {
-            if (this.alias_flags[flagName]) {
-              params_raw[this.alias_flags[flagName]] = parameters[idx + 1];
-            } else {
-              params_raw[flagName] = parameters[idx + 1];
-            }
-
-            idx += 2;
+            params_raw[flagName] = paramValue;
           }
+
+          idx += 2;
         }
       } else {
-        if (value == '') break; // Skip empty strings for safety
+        if (value == '') {
+          idx += 1;
+          continue; 
+        }
         params_raw.default = value;
         idx += 1;
       }
@@ -81,6 +87,11 @@ class tapi {
   static is_flags(parameters, flags) {
     flags = flags.map(flag => flag.replace(/^-+/, '').replace(/-/g, '_'));
     return flags.map(flag => parameters.includes(flag)).some(Boolean);
+  }
+
+  static pair_flags_exist(name) {
+    name = name.replace(/^-+/, '').replace(/-/g, '_');
+    return this.bind_behavior.some((cell) => cell.type == this.type_place.exit_flag && cell.names.includes(name));
   }
 
   static bind_exit_flags(names, func) {
@@ -109,14 +120,31 @@ class tapi {
     this.alias_flags[alias] = flag;
   }
 
+  static bind_multiple_group_value_pair_flag(...names) {
+    names = names.map(name => name.replace(/^-+/, '').replace(/-/g, '_'));
+    this.bind_behavior.push({ names, type: this.type_place.multiple_group_value });
+    this.multi_flags.push(...names);
+  }
+
+  static is_multiple_group_value_pair_flag(nameflag) {
+    nameflag = nameflag.replace(/^-+/, '').replace(/-/g, '_');
+    return this.multi_flags.includes(nameflag);
+  }
+
   static clean_long_flag(flag) {
     flag = flag.replace(/^-+/, '').replace(/-/g, '_');
     return flag;
   }
 
   static abstract_pipeline_factory(_arguments, _throw_bool) {
+    const all_registered = [
+      ...this.bind_behavior.map(box => box?.names || []).flat(), 
+      ...Reflect.ownKeys(this.alias_flags), 
+      'default'
+    ];
+
     for (const _arg of Reflect.ownKeys(_arguments))
-      if (!new Set([...this.bind_behavior.map(box => box?.names || []).flat(), ...Reflect.ownKeys(this.alias_flags), 'default']).has(_arg)) return (_throw_bool ? false : _arg);
+      if (!new Set(all_registered).has(_arg)) return (_throw_bool ? false : _arg);
     return true;
   }
 

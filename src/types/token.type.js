@@ -30,6 +30,7 @@ class TypeOfToken {
   static MINUS_EQUAL = 'MINUS_EQUAL';
   static MULTIPLY_EQUAL = 'MULTIPLY_EQUAL';
   static DIVIDE_EQUAL = 'DIVIDE_EQUAL';
+  static ELLIPSIS = 'ellipsis'; // ...
   static EOF = 'EOF';
 
   static CUSTOM = {

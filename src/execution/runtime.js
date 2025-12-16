@@ -9,6 +9,7 @@ class Runtime {
   static HAS_MAIN_FUNCTION = false;
   /** This property can be accessed and it is intended to store terminal arguments that may be passed to the program during runtime. */
   static TERMINAL_ARGV = {};
+  static INTERNAL_OBJVARS = {};
   /** - JIT-compiler: Warning */
   static JIT_COMPILER_WARNING = 'JIT-compiler: Warning';
   static ZCC_PARSER_WARNING = "zcc warning";

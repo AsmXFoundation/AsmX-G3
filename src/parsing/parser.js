@@ -9,6 +9,8 @@ const SyntaxScannerItem = require("./scanner-item.js");
 const BuilderAtomicExpression = require("../ast/builder.atomic.js");
 const Runtime = require("../execution/runtime.js");
 
+// this.exceptDefaultTracewayException(token, 'There is no name, use name declare to define it');
+
 class RecursiveDescentParser {
   /**
    * @param {string} mode
@@ -106,45 +108,96 @@ class RecursiveDescentParser {
           this.index++;
         }
 
-        else if (
-          [
-            TypeOfInstructionExpression.DECLARATION, TypeOfInstructionExpression.OBJECT_ORIENTED_PROGRAMMING
-          ]
-            .includes(TypeOfInstructionExpression.classification(token))
-        ) {
-          let leftPossibleTerms = [];
+        else if ([TypeOfInstructionExpression.DECLARATION, TypeOfInstructionExpression.OBJECT_ORIENTED_PROGRAMMING]
+          .includes(TypeOfInstructionExpression.classification(token))) {
 
-          leftPossibleTerms = this.localCollectTokens(possibleTerms, peek =>
-            ![TypeOfToken.OPEN_PAREN, TypeOfToken.OPEN_CURLY_BRACKET].some(type => type == peek.type)
-          );
+          // 1. Find the Body separator (Open Curly Bracket)
+          // We look for the first '{' at the top level of possibleTerms
+          let bodyStartIndex = -1;
+          let nestingLevel = 0;
 
-          possibleTerms = possibleTerms.slice(leftPossibleTerms.length);
-          leftPossibleTerms = this.getNodes(leftPossibleTerms);
+          // Use a manual loop instead of findIndex to account for parentheses nesting. This allows us to ignore {} inside other parentheses.
+          for (let i = 0; i < possibleTerms.length; i++) {
+            const t = possibleTerms[i];
 
-          ast.push(...leftPossibleTerms);
+            if ([TypeOfToken.OPEN_PAREN, TypeOfToken.OPEN_SQUARE_BRACKET].includes(t.type)) {
+              nestingLevel++;
+            } else if ([TypeOfToken.CLOSE_PAREN, TypeOfToken.CLOSE_SQUARE_BRACKET].includes(t.type)) {
+              nestingLevel--;
+            }
 
-          // if we have a empty instruction expression
-          if (possibleTerms.length == 0) {
-            SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Declaration instruction cannot be empty');
+            // Handling curly braces
+            else if (t.type === TypeOfToken.OPEN_CURLY_BRACKET) {
+              if (nestingLevel === 0) {
+                bodyStartIndex = i; // If we are at the top level, this is the start of the function body
+                break;
+              } else {
+                nestingLevel++; // If inside other brackets, just increase the nesting level
+              }
+            } else if (t.type === TypeOfToken.CLOSE_CURLY_BRACKET) {
+              nestingLevel--;
+            }
           }
 
-          if (possibleTerms[0].type == TypeOfToken.OPEN_PAREN) {
-            SyntaxScannerItem.mode = SyntaxScannerItem.MODES.signature;
-
-            let signature = this.localCollectTokens(possibleTerms, peek => peek.type != TypeOfToken.CLOSE_PAREN, true);
-            possibleTerms = possibleTerms.slice(signature.length);
-
-            signature.unshift(leftPossibleTerms[leftPossibleTerms.length - 1]);
-            ast.pop();
-
-            signature = this.getNodes(signature);
-            ast.push(...signature);
-
-            SyntaxScannerItem.mode = SyntaxScannerItem.MODES.item;
+          if (bodyStartIndex === -1) {
+            SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Expected function body in curly braces');
           }
 
-          ast.push(...this.getNodes(possibleTerms));
-          this.index += 2;
+          // 2. Separate Header (Name, Args, ReturnType) from Body
+          const headerTokens = possibleTerms.slice(0, bodyStartIndex);
+          const bodyTokens = possibleTerms.slice(bodyStartIndex); // Includes { ... }
+          const parentheses = [bodyTokens.at(0), bodyTokens.at(-1)];
+
+          // 3. Handle Return Type (->) within the Header
+          // Everything before '->' is the Declaration (Attributes + Name + Args)
+          // Everything after '->' is the Return Type       
+          const prefetchTokens = this.localCollectTokens(headerTokens, peek => peek.type != TypeOfToken.CUSTOM.ARROW, true);
+          let declarationTokens = prefetchTokens;
+
+          let returnNodes = headerTokens.slice(prefetchTokens.length);
+          const arrowToken = returnNodes.shift(); // remove "->"
+          returnNodes = this.getNodes(returnNodes);
+
+          if (returnNodes.length > 1 || (arrowToken && returnNodes.length == 0)) {
+            SyntaxScannerExpression.exceptDefaultTracewayException(arrowToken, 'Expected one expr in the return type');
+          }
+
+          const previousMode = SyntaxScannerItem.mode;
+          SyntaxScannerItem.mode = SyntaxScannerItem.MODES.signature;
+
+          // 4. Parse the Declaration part (Attributes + Name + Optional Args)
+          const declNodes = this.getNodes(declarationTokens);
+
+          SyntaxScannerItem.mode = previousMode;
+
+          if (declNodes.length === 0) {
+            SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Function must have a name');
+          }
+
+          // 5. Parse the Body part
+          const bodyNodes = this.getNodes(bodyTokens); // Returns [OBJECT]
+
+          // 6. Construct AST strictly for Builder compatibility
+          const declNode = declNodes[declNodes.length - 1]; // The actual function name/call (last item if attributes exist)
+          const attributes = declNodes.slice(0, -1);
+          
+          ast.push(...attributes); // Push attributes first
+
+          if (declNode.type === TypeOfAtomicExpression.CALL) {
+            // Case: "fn main()" -> Parser sees CALL
+            // Builder logic (else block) expects: ast[0] (CALL) and ast[1] (BODY)
+            ast.push(declNode);
+            ast.push(bodyNodes[0]);
+          } else if ([TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.MEMBER].includes(declNode.type)) {
+            const commonExpression = new Expression(TypeOfAtomicExpression.CALL, { parentheses: [], caller: declNode, arguments: [] });
+            ast.push(commonExpression);
+            // ast.push(declNode);
+            ast.push(bodyNodes[0]);
+          } else {
+            SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Invalid function declaration syntax');
+          }
+
+          ast.push(...returnNodes);
 
           /**
            * HOTFIX
@@ -166,11 +219,18 @@ class RecursiveDescentParser {
            * This means that token selection is important when an expression is
            * completed, especially block expressions.
            */
-          if (this.peek().type == TypeOfToken.INSTRUCTION) {
+          if (this.peek()?.type == TypeOfToken.INSTRUCTION) {
             this.index--;
           }
-          
-        } else {
+
+          /**
+           * NOTE:
+           * Because the function parsing mechanism has become fully functional, this bug simply disappeared. An anomaly.
+           */
+          this.index++;
+        }
+
+        else {
           const { bufferAST, bufferIndex, bufferSizeTokens, bufferTokens } = this.startRecursive();
           const nodes = this.parser(possibleTerms);
           this.endRecursive(bufferAST, bufferIndex, bufferSizeTokens, bufferTokens);
@@ -191,8 +251,14 @@ class RecursiveDescentParser {
         const commonExpression = new Expression(TypeOfAtomicExpression.MEMBER, {
           point: lastItemOfAST,
           typeRoute: token,
-          link: this.getNextToken()
+          link: null
         });
+
+        if (this.mode == Runtime.JCC_COMPILATION_MODE) {
+          commonExpression.body.link = this.getNextToken();
+        } else if (this.mode == Runtime.ZCC_COMPILATION_MODE) {
+          commonExpression.body.link = new Expression(TypeOfAtomicExpression.IDENTIFER, { identifer: this.getNextToken() });
+        }
 
         if (lastItemOfAST instanceof Expression && lastItemOfAST.type == TypeOfAtomicExpression.MEMBER) {
           commonExpression.upgradeBody({ firstToken: lastItemOfAST.body.firstToken });
@@ -216,8 +282,10 @@ class RecursiveDescentParser {
       }
 
       else if ([TypeOfToken.STRING, TypeOfToken.APOSTROPHE_STRING].includes(token.type)) {
+        const unescapedLexem = this.interpretEscapeSequences(token.lexem);
+
         const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, {
-          string: token
+          string: { ...token, lexem: unescapedLexem }
         });
 
         commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.STRING });
@@ -245,112 +313,67 @@ class RecursiveDescentParser {
       }
 
       else if (token.type == TypeOfToken.NUMBER) {
-        const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, {
-          number: token
-        });
-
+        const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, { number: token });
         commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.NUMBER });
         this.push(commonExpression);
       }
 
       else if (token.type == TypeOfToken.IDENTIFER && ['true', 'false'].includes(token.lexem)) {
-        const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, {
-          boolean: token
-        });
-
+        const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, { boolean: token });
         commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.BOOLEAN });
         this.push(commonExpression);
       }
 
       else if (token.type == TypeOfToken.IDENTIFER) {
-        // console.log("last: ", this.getLastItemAST());
-        // console.log("token: ", token);
-
         if (this.getLastItemAST() instanceof Expression && this.getLastItemAST()?.subtype == TypeOfAtomicExpression.LITERALS.NUMBER) {
           const token_number = this.getLastItemAST();
+
+          const is_imm = token_number.body.number.lexem[0] == "$";
+          const prefix = is_imm ? token_number.body.number.lexem.slice(1) : token_number.body.number.lexem;
           const current_number_token = token_number.body.number.current + (token_number.body.number.lexem.length > 1 ? token_number.body.number.lexem.length - 1 : 0);
 
-          // console.log(current_number_token, token.current - 1);
+          if (prefix != "0" || current_number_token != token.current - 1) {
+            new exceptions.TokenException(`An identifier or keyword cannot immediately follow a numeric literal.`, token, 'SyntaxException');
+            return;
+          }
 
-          if (current_number_token == token.current - 1) {
-            const identifer = token.lexem;
-            const value_number = token_number.body.number.lexem;
+          const number_terms = new Map();
+          number_terms.set("x", [/^[0-9a-fA-F]+$/, 16, "Hexadecimal"]); number_terms.set("b", [/^[01]+$/, 2, "Binary"]); number_terms.set("o", [/^[0-7]+$/, 8, "Octal"]);
 
-            function build_number_expression(lexem, system) {
-              // console.log(lexem, system, lexem.toString(system), parseInt(lexem, system));
-
-              const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, {
-                number: {
-                  type: TypeOfToken.NUMBER,
-                  lexem: `${parseInt(lexem, system)}`,
-                  current: token_number.body.number.current,
-                  line: token_number.body.number.line,
-                  code: token_number.body.number.code
-                }
-              });
-
-              commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.NUMBER });
-              // console.log(commonExpression);
-              return commonExpression;
+          function build_number_expression(bound, parent_token, lexem, is_imm, system, system_string) {
+            if (!bound || lexem.length == 0) {
+              new exceptions.TokenException(`${system_string} digit expected.`, token, 'SyntaxException');
+              return;
             }
 
-            // console.log(value_number, identifer, token_number.body.number.lexem == '0');
-
-            if (token_number.body.number.lexem == '0' && identifer[0] == 'x') {
-              if (/^[0-9a-fA-F]+$/.test(identifer.slice(1)) == false) {
-                new exceptions.TokenException('Hexadecimal digit expected.', token, 'SyntaxException');
-                return;
-              } else {
-                this.ast.pop(); // remove the number token
-                this.push(build_number_expression(identifer.slice(1), 16));
+            const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, {
+              number: {
+                type: TypeOfToken.NUMBER,
+                lexem: `${is_imm ? "$" : ""}${parseInt(lexem, system)}`,
+                current: parent_token.current,
+                line: parent_token.line,
+                code: parent_token.code
               }
-            }
+            });
+            commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.NUMBER });
+            return commonExpression;
+          }
 
-            else if (token_number.body.number.lexem == '0' && identifer[0] == 'b') {
-              if (/^[01]+$/.test(identifer.slice(1)) == false) {
-                new exceptions.TokenException('Binary digit expected.', token, 'SyntaxException');
-                return;
-              } else {
-                this.ast.pop(); // remove the number token
-                this.push(build_number_expression(identifer.slice(1), 2));
-              }
-            }
-
-            else if (token_number.body.number.lexem == '0' && identifer[0] == 'o') {
-              if (/^[0-7]+$/.test(identifer.slice(1)) == false) {
-                new exceptions.TokenException('Octal digit expected.', token, 'SyntaxException');
-                return;
-              } else {
-                this.ast.pop(); // remove the number token
-                this.push(build_number_expression(identifer.slice(1), 8));
-              }
-            }
-
-            else {
+          for (const [prefix, vec] of number_terms) {
+            const [regex, system, system_string] = vec;
+            if (token.lexem[0] == prefix) {
+              this.ast.pop();
+              this.push(build_number_expression(regex.test(token.lexem.slice(1)), token_number.body.number, token.lexem.slice(1), is_imm, system, system_string));
+              break;
+            } else {
               new exceptions.TokenException(`An identifier or keyword cannot immediately follow a numeric literal.`, token, 'SyntaxException');
               return;
             }
-          } else {
-            // console.log("SNIP TOKEN: ", token);
-            const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFER, {
-              identifer: token
-            });
-            this.push(commonExpression);
           }
         } else {
-          // console.log("FREEEEEEEEEEEEEEEEE TOKEN: ", token);
-
-          const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFER, {
-            identifer: token
-          });
-
+          const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFER, { identifer: token });
           this.push(commonExpression);
         }
-
-        // const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFER, {
-        //     identifer: token
-        // });
-        // this.push(commonExpression);
       }
 
       else if (token.type == TypeOfToken.COMMA) {
@@ -498,14 +521,23 @@ class RecursiveDescentParser {
 
   zcc_parser(token, ast, possibleTerms, previousNode) {
     const classification = TypeOfInstructionExpression.zcc_classification(token);
-    const commonExpression = new Expression(TypeOfInstructionExpression.INSTRUCTION, { 
+    const commonExpression = new Expression(TypeOfInstructionExpression.INSTRUCTION, {
       id: token,
       subtype: classification,
       mnemonic: TypeOfInstructionExpression.extractNameOfInstruction(token),
     });
 
     if (classification == TypeOfInstructionExpression.ZCC_GENERIC_INSTRUCTION) {
-      commonExpression.upgradeBody({ operands: BuilderExpression.zcc_build_generic_instruction(ast) });
+      if (TypeOfInstructionExpression.has(token.lexem, 'syscall')) {
+        SyntaxScannerExpression.zcc_scan_syscall_instruction(token, ast);
+        commonExpression.upgradeBody(BuilderExpression.zcc_build_syscall_instruction(ast));
+      } else if (TypeOfInstructionExpression.has(token.lexem, 'call')) {
+        SyntaxScannerExpression.zcc_scan_call_instruction(token, ast);
+        commonExpression.upgradeBody({ operands: BuilderExpression.zcc_build_call_instruction(ast) });
+      } else {
+        commonExpression.upgradeBody({ operands: BuilderExpression.zcc_build_generic_instruction(ast) });
+      }
+
       this.push(commonExpression);
     } else {
       if (classification == TypeOfInstructionExpression.MODULE) {
@@ -520,15 +552,6 @@ class RecursiveDescentParser {
       } else if (classification == TypeOfInstructionExpression.SECTION) {
         SyntaxScannerExpression.zcc_scan_section_instruction(token, ast);
         commonExpression.upgradeBody(BuilderExpression.zcc_build_section_instruction(ast));
-      } else if (classification == TypeOfInstructionExpression.SYSTEM) {
-        if (TypeOfInstructionExpression.has(token.lexem, 'syscall')) {
-          SyntaxScannerExpression.zcc_scan_syscall_instruction(token, ast);
-          commonExpression.upgradeBody(BuilderExpression.zcc_build_syscall_instruction(ast));
-        } else {
-          new exceptions.WarningExpressionException(
-            `Not supported ${token.lexem} instruction`, token, Runtime.ZCC_PARSER_WARNING
-          );
-        }
       } else if (classification == TypeOfInstructionExpression.DECLARATION) {
         if (TypeOfInstructionExpression.has(token.lexem, 'fn')) {
           const attributes = BuilderExpression.getAttributes(ast);
@@ -895,6 +918,33 @@ class RecursiveDescentParser {
     this.peek().type == TypeOfToken.EOF;
   }
   //#endregion Helper Functions
+
+  interpretEscapeSequences(rawString) {
+    if ((rawString.startsWith('"') && rawString.endsWith('"')) || (rawString.startsWith("'") && rawString.endsWith("'"))) {
+      rawString = rawString.slice(1, -1);
+    }
+
+    const simpleEscapeMap = { 'n': '\n', 't': '\t', 'r': '\r', '\\': '\\', '"': '"', "'": "'" };
+    const regex = /\\(?:([ntr\\"'])|x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|([0-7]{1,3}))/g;
+
+    return rawString.replace(regex, (match, simple, hex, unicode, unicode_ext, octal) => {
+      if (simple) {
+        return simpleEscapeMap[simple];
+      }
+
+      if (octal) {
+        return String.fromCharCode(parseInt(octal, 8));
+      }
+
+      const code = hex || unicode || unicode_ext;
+      if (code) {
+        const charCode = parseInt(code, 16);
+        return String.fromCodePoint(charCode);
+      }
+
+      return match;
+    });
+  }
 }
 
 module.exports = RecursiveDescentParser;

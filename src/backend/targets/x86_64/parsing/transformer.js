@@ -85,6 +85,33 @@ class Transformer {
         }
       }
 
+      // The build of the ellipsis
+      else if (token.type === TypeOfToken.DOT) {
+        const nextToken = this.getNextToken();
+        const nextNextToken = this.tokens[this.index + 2]; // Peek ahead +2
+
+        if (nextToken && nextToken.type === TypeOfToken.DOT && nextNextToken && nextNextToken.type === TypeOfToken.DOT) {
+          // Valid '...': combine into ELLIPSIS
+          const newLexem = token.lexem + nextToken.lexem + nextNextToken.lexem; // '...'
+
+          result.push({
+            type: TypeOfToken.ELLIPSIS,
+            lexem: newLexem,
+            current: token.current,
+            line: token.line,
+            code: token.code
+          });
+
+          this.index += 2; // Skip the next two DOTs
+        } else if (nextToken && nextToken.type === TypeOfToken.DOT) {
+          // Invalid '..': error (partial ellipsis)
+          SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Invalid ellipsis: expected three dots \'...\', found only two');
+        } else {
+          // Single '.' or more: if more than three, error later in scanner, but for now push as is
+          result.push(token);
+        }
+      }
+
       else {
         result.push(token);
       }

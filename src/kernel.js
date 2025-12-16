@@ -9,6 +9,8 @@ const llvm_config = require('llvm.js/package.json');
 const path = require('path');
 const Color = require('./utils/color.js');
 const aliases = require('./aliases.js');
+const Supervisor = require('./supervisor.js');
+const Module = require('module');
 
 let INTERNAL_ARGV;
 const INTERNAL_OBJVARS = {};
@@ -23,6 +25,7 @@ tapi.bind_exit_flags(['h', 'help'], helper);
 tapi.bind_exit_flags(['help=common'], help_common);
 tapi.bind_exit_flags(['help=llvm'], help_llvm);
 tapi.bind_exit_flags(['help=package'], help_package);
+tapi.bind_exit_flags(['help=compiler-options'], help_compiler_options);
 tapi.bind_exit_flags(['v', 'version'], version);
 tapi.bind_exit_flags(['aliases'], aliases.printAliases);
 tapi.bind_exit_flags(['dumpversion'], dumpversion);
@@ -30,6 +33,8 @@ tapi.bind_exit_flags(['dumpmachine'], dumpmachine);
 tapi.bind_exit_flags(['llvm-version'], llvm_version);
 tapi.bind_exit_flags(['llvm-dumpversion'], llvm_dumpversion);
 tapi.bind_exit_flags(['llvm-repository'], llvm_repository);
+tapi.bind_exit_flags(['features-list'], get_features_list);
+tapi.bind_exit_flags(['multiclean'], build_multiclean);
 
 tapi.bind_single_flags('h', 'help');
 tapi.bind_single_flags('v', 'version');
@@ -45,8 +50,24 @@ tapi.bind_single_flags('r', 'release');
 tapi.bind_single_flags('q', 'quiet');
 tapi.bind_single_flags('emergency-panic');
 
-tapi.bind_pair_flags('objname');
+// Supervisor flags
+tapi.bind_single_flags('multiboot');
+tapi.bind_single_flags('multiclean');
+// Multiple Value Flags
+tapi.bind_multiple_group_value_pair_flag('objname');
+tapi.bind_multiple_group_value_pair_flag('header');
+tapi.bind_multiple_group_value_pair_flag('source');
+tapi.bind_multiple_group_value_pair_flag('include');
+
+// tapi.bind_pair_flags('objname');
 tapi.bind_pair_flags('target');
+tapi.bind_pair_flags('march');
+tapi.bind_pair_flags('features');
+tapi.bind_pair_flags('features-list');
+tapi.bind_pair_flags('verbose-common');
+tapi.bind_pair_flags('verbose-driver');
+tapi.bind_pair_flags('verbose-hwc');
+tapi.bind_pair_flags('traceback-hwc');
 
 // Packaging flags
 // boolean flags
@@ -65,10 +86,13 @@ tapi.bind_alias_flag('v', 'version');
 tapi.bind_alias_flag('a', 'aliases');
 tapi.bind_alias_flag('r', 'release');
 tapi.bind_alias_flag('o', 'objname');
+tapi.bind_alias_flag('I', 'include');
 tapi.bind_alias_flag('t', 'target');
+tapi.bind_alias_flag('m', 'march');
 tapi.bind_alias_flag('q', 'quiet');
 
-tapi.bind_alias_flag('hwm@passtests', 'hwm_units');
+// tapi.bind_alias_flag('hwm-units', 'hwm_units');
+// tapi.bind_single_flags('--hwm-units'); // note: closed for next release
 
 tapi.bind_func(['update'], updater);
 tapi.bind_func(['export-json-isa'], export_json_isa);
@@ -94,15 +118,20 @@ function helper() {
   journal_composer_TL3("  -r, --release           Create a executable file");
   journal_composer_TL3("  -o, --objname           Set the output file name");
   journal_composer_TL3("  -t, --target            Specify the target CPU architecture (x86_64, etc) for compilation");
+  journal_composer_TL3("  -m, --march             Specify the target CPU microarchitecture (x86_64, etc) for compilation");
+  journal_composer_TL3('  --features              Specify CPU features for compilation');
+  journal_composer_TL3('  --multiboot             Enable multiboot compilation mode');
+
   journal_composer_TL3('Commands:');
   journal_composer_TL3('  --update                Update AsmX compilation platform');
   journal_composer_TL3('  --package               Create package from compiled executable');
+  journal_composer_TL3('  --multiclean            Clean artifacts created by multiboot compilation'); 
 }
 
 function help_begin_block(_print_title = true) {
   _print_title && Server.journal.log('Options:');
   Server.journal.log('  -h, --help              Display this information');
-  Server.journal.log('  --help={common|llvm|package}');
+  Server.journal.log('  --help={common|llvm|package|compiler-options}');
   Server.journal.log('                          Display specific types of command line options');
   Server.journal.log('  -v, --version           Display the version number');
   Server.journal.log('  -a, --aliases           Display the aliases of the compiler');
@@ -119,6 +148,7 @@ function help_common() {
   help_begin_block(false);
   help_llvm(false);
   help_package(false);
+  help_compiler_options(false);
 }
 
 function help_llvm(_print_title = true) {
@@ -140,18 +170,29 @@ function help_package(_print_title = true) {
   Server.journal.log('  --package-desktop       Create desktop entry (true/false)');
 }
 
+function help_compiler_options(_print_title = true) {
+  _print_title && Server.journal.log('Compilation Options:');
+  Server.journal.log("  -r, --release           Create a executable file");
+  Server.journal.log("  -o, --objname           Set the output file name");
+  Server.journal.log("  -t, --target            Specify the target CPU architecture (x86_64, etc) for compilation");
+  Server.journal.log("  -m, --march             Specify the target CPU microarchitecture (x86_64, etc) for compilation");
+  Server.journal.log('  --features              Specify CPU features for compilation');
+  Server.journal.log('  --features-list         Get CPU features for compilation');
+  Server.journal.log('  --multiboot             Enable multiboot compilation mode');
+}
+
 function version() {
   Server.journal.log('AsmX G3 (AsmX Generation 3)');
   dumpversion();
 }
 
 function dumpversion() {
-  Server.journal.log('Version: v29 (rev 1.0)');
+  Server.journal.log('Version: v30 (rev 1.0)');
 }
 
 function dumpmachine() {
-  Server.journal.log("target: amd64-unknown-linux-gnu");
-  Server.journal.log("build: amd64-unknown-linux-gnu");
+  Server.journal.log("target: amd64-unknown-linux");
+  Server.journal.log("build: amd64-unknown-linux");
 }
 
 function llvm_version() {
@@ -182,13 +223,117 @@ function export_json_isa(_arguments) {
   AssemblyInstructionDescriptorTable.exportToJSON(path.join(process.cwd(), `isa-${_arguments[INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA]}.json`));
 }
 
-function insufficient_arguments(arg_default, cb) {
+function get_features_list(_arguments) {
+  __asmx_prepare_pipeline_factory_fn(_arguments);
+  const cpath = path.join(INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_TARGETS, _arguments[INTERNAL_OBJVARS.TTY_NFG_SPECIFY_GET_FEATURES_CPU], 'hwm', 'features');
+  const features = [];
+  let instructions = 0;
+  fs.readdirSync(cpath).forEach(file => {
+    if (file.endsWith('.cjs')) {
+      const dmod = require(path.join(cpath, file));
+      const list_features = Reflect.ownKeys(dmod).filter(key => typeof dmod[key] === 'function');
+      for (const feature of list_features) {
+        features.push(dmod[feature].key);
+        dmod[feature].defineInstructions();
+        instructions = dmod[feature].getInstructionSet().size;
+      }
+    }
+  });
+  Server.journal.log(`Features (${features.length} features / ${instructions} instructions): ${features.join(' ')}`);
+}
+
+function __asmx_get_cache_dir() {
+  return path.join(process.cwd(), '.cache', 'asmx');
+}
+
+function __asmx_get_manifest_path() {
+  return path.join(__asmx_get_cache_dir(), 'multiboot_manifest.json');
+}
+
+function __asmx_record_multiboot_artifacts(terminal_arguments) {
+  if (!terminal_arguments.objname || !Array.isArray(terminal_arguments.objname)) {
+    return;
+  }
+
+  const manifestPath = __asmx_get_manifest_path();
+  const cacheDir = __asmx_get_cache_dir();
+
+  try {
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+
+    const artifacts = terminal_arguments.objname.map(file => path.resolve(process.cwd(), file));
+    const payload = JSON.stringify({ timestamp: Date.now(), files: artifacts }, null, 2);
+
+    fs.writeFileSync(manifestPath, payload, 'utf8');
+    if (Server.driverJournal && Server.driverJournal.verbose > 0) {
+      Server.journal.info(`[Multiboot] Build manifest saved to ${manifestPath}`);
+    }
+  } catch (error) {
+    Server.journal.error(`Failed to save multiboot manifest: ${error.message}`);
+  }
+}
+
+function build_multiclean() {
+  Server.journal.info('Starting multiclean cleanup...');
+  const manifestPath = __asmx_get_manifest_path();
+
+  if (!fs.existsSync(manifestPath)) {
+    Server.journal.error('No multiboot manifest found in .cache/asmx/');
+    Server.journal.log('  -> Nothing to clean or build was not run with --multiboot previously.');
+    process.exit(1);
+  }
+
+  try {
+    const content = fs.readFileSync(manifestPath, 'utf8');
+    const manifest = JSON.parse(content);
+    
+    if (!manifest.files || !Array.isArray(manifest.files)) {
+      throw new Error("Invalid manifest format");
+    }
+
+    let deletedCount = 0;
+    let failCount = 0;
+
+    manifest.files.forEach(filePath => {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          Server.journal.log(`  [Removed] ${path.relative(process.cwd(), filePath)}`);
+          deletedCount++;
+        } else {
+          Server.journal.warn(`  [Skipped] ${path.relative(process.cwd(), filePath)} (not found)`);
+        }
+      } catch (err) {
+        Server.journal.error(`  [Error] Failed to remove ${path.relative(process.cwd(), filePath)}`);
+        failCount++;
+      }
+    });
+
+    fs.unlinkSync(manifestPath);
+
+    try {
+      if (fs.readdirSync(__asmx_get_cache_dir()).length === 0) {
+        fs.rmdirSync(__asmx_get_cache_dir());
+      }
+    } catch (e) {}
+
+    Server.journal.info(`Cleanup complete. Removed: ${deletedCount}, Failed: ${failCount}`);
+
+  } catch (error) {
+    Server.journal.error(`Multiclean failed: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+function insufficient_arguments(arg_default, insufficient_arguments_cb) {
   if (arg_default == INTERNAL_OBJVARS.INTERNAL_SIG_INSUFFICIENT_ARGS) {
     Server.journal.error('Insufficient arguments');
-    cb && cb();
+    insufficient_arguments_cb && insufficient_arguments_cb();
     process.exit();
   } else if (arg_default == INTERNAL_OBJVARS.INTERNAL_SIG_NOT_INSUFFICIENT_ARGS) {
-    cb && cb();
+    insufficient_arguments_cb && insufficient_arguments_cb();
     process.exit();
   }
 }
@@ -234,7 +379,7 @@ function __asmx_kernel_panic_fn(message, error) {
       line = line.trim();
       if (line.includes('at async')) return;
       if (line.includes('(')) line = line.slice(0, line.indexOf('('));
-      if (line.startsWith('at __asmx')) {
+      if (line.startsWith('at __asmx') || 1) {
         line = `${Color.FG_GREEN}kernel::${line.slice(3)}${name}.rs (${ext.slice(4)}) ${Color.RESET}`;
       } else {
         return;
@@ -301,7 +446,7 @@ function __asmx_handler_signals_fn() {
     const error = reason instanceof Error ? reason : new Error(`Unhandled Rejection: ${reason}`);
     Server.journal.error(`Unhandled Rejection, Reason: ${reasonText.slice(reasonText.indexOf(':') + 1).trim()}`);
     GVE.COUNT_SYSERR += 1;
-    // console.log(origin); // 
+    // console.log(origin); //
     Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
     __asmx_throw_sigsegv(error);
   });
@@ -366,8 +511,7 @@ function __asmx_get_cpu_march_aux_fn() {
     cpu_model = cpu_model.slice(0, cpu_model.indexOf(' '));
     let cpu_gen = cpu_model.slice(cpu_model.indexOf('-') + 1);
 
-    const intel_max_gens = 14;
-    const mark_gen = [];
+    const [intel_max_gens, mark_gen] = [14, []];
     for (let i = 1; i <= intel_max_gens; i++) {
       mark_gen.push(i.toString());
     }
@@ -427,7 +571,7 @@ function __asmx_prepare_pipeline_factory_fn(_arguments) {
     }
   }
 
-  const support_targets_keys = [INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE, INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA];
+  const support_targets_keys = [INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE, INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA, INTERNAL_OBJVARS.TTY_NFG_SPECIFY_GET_FEATURES_CPU];
   for (const support_target_key of support_targets_keys.filter(arg => _arguments.hasOwnProperty(arg))) {  
     const support_targets = fs.readdirSync(INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_TARGETS);
     if (support_targets.length == 0) {
@@ -474,6 +618,90 @@ function __asmx_prepare_pipeline_factory_fn(_arguments) {
 
     _arguments[support_package_type] = got_package_type_alias;
   }
+
+  const multivalued_keys = [INTERNAL_OBJVARS.TTY_NFG_SPECIFY_FEATURES_CPU];
+
+  for (const _a of Reflect.ownKeys(_arguments).filter(arg => !multivalued_keys.includes(arg))) {
+    if (_arguments[_a] && _arguments[_a].toString().includes(',') && tapi.is_multiple_group_value_pair_flag(_a) == false) {
+      Server.journal.error(`The ${_a} parameter cannot have multiple values`);
+      insufficient_arguments(INTERNAL_OBJVARS.INTERNAL_SIG_NOT_INSUFFICIENT_ARGS, helper);
+    }
+  }
+
+  for (const multivalued_key of multivalued_keys.filter(arg => _arguments.hasOwnProperty(arg))) {
+    _arguments[multivalued_key] = _arguments[multivalued_key].split(',');
+  }
+}
+
+function __asmx_settngs_pipeline_factory_fn(_arguments) {
+  if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_QUIET)) {
+    Server.setQuiet(true);
+  }
+
+  if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_VERBOSE_COMMON)) {
+    Server.setVerbose(parseInt(_arguments[INTERNAL_OBJVARS.TTY_NFG_VERBOSE_COMMON]));
+  }
+
+  if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_VERBOSE_HWC)) {
+    Server.hwcJournal.setVerbose(parseInt(_arguments[INTERNAL_OBJVARS.TTY_NFG_VERBOSE_HWC]));
+  }
+
+  if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_VERBOSE_DRIVER)) {
+    Server.driverJournal.setVerbose(parseInt(_arguments[INTERNAL_OBJVARS.TTY_NFG_VERBOSE_DRIVER]));
+  }
+
+  if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_TRACEBACK_HWC)) {
+    Server.hwcJournal.setTraceback(parseInt(_arguments[INTERNAL_OBJVARS.TTY_NFG_TRACEBACK_HWC]));
+  }
+
+  // multiple_group_value_pair_flag is forbidden in the non zgen & non multiboot mode
+  if (!_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_COMPILE_RELEASE_MODE)) { 
+    const forbidden_flags = [INTERNAL_OBJVARS.TTY_NFG_SOURCE_FILE, INTERNAL_OBJVARS.TTY_NFG_HEADER_FILE, INTERNAL_OBJVARS.TTY_NFG_OUTNAME_FILE];
+    const condition_forbidden_flag = _arg => forbidden_flags.includes(_arg);
+    if (Reflect.ownKeys(_arguments).map(condition_forbidden_flag).some(Boolean)) {
+      const flag = Reflect.ownKeys(_arguments).filter(condition_forbidden_flag)[0];
+      Server.journal.error(`The "--${flag}" flag not allows on the non zgen mode`, "/dev/suv0");
+      __asmx_procexit();
+    }
+
+    const condition = _arg => tapi.is_multiple_group_value_pair_flag(_arg) && (Array.isArray(_arguments[_arg]) && _arguments[_arg].length > 1);
+    if (Reflect.ownKeys(_arguments).map(condition).some(Boolean)) {
+      const flag = Reflect.ownKeys(_arguments).filter(condition)[0];
+      Server.journal.error(`The "--${flag}" flag in multiple not allows on the non zgen mode`, "/dev/suv0");
+      __asmx_procexit();
+    }
+  } else if (_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_COMPILE_RELEASE_MODE) && !_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTIBOOT_MODE)) {
+    const condition = _arg => tapi.is_multiple_group_value_pair_flag(_arg) && (Array.isArray(_arguments[_arg]) && _arguments[_arg].length > 1);
+    if (Reflect.ownKeys(_arguments).map(condition).some(Boolean)) {
+      const flag = Reflect.ownKeys(_arguments).filter(condition)[0];
+      Server.journal.error(`The "--${flag}" flag in multiple not allows on the non "--${INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTIBOOT_MODE}" mode`, "/dev/suv0");
+      __asmx_procexit();
+    }
+  }
+}
+
+async function __asmx_if_init_config_file_fn(_terminal_arguments) {
+  let path_config = null;
+  if (_terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_DEFAULT) && _terminal_arguments.default != null) {
+    path_config = _terminal_arguments.default.startsWith(INTERNAL_OBJVARS.TTY_SYMBOL_MENTION) ? _terminal_arguments.default.slice(1) : null;
+  }
+
+  if (_terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_CFGFILE)) {
+    path_config = _terminal_arguments.file.startsWith(INTERNAL_OBJVARS.TTY_SYMBOL_MENTION) ? _terminal_arguments.file.slice(1) : _terminal_arguments.file;
+  }
+
+  if (path_config) {
+    Server.journal.info(`Using config file: ${path_config}`);
+    let exist_file_cfg = await __asmx_perf_file_exist_fn(path_config);
+    if (exist_file_cfg) {
+      const predefined_config = (await fs.promises.readFile(path_config, 'utf8')).trim();
+      return tapi.parse(predefined_config);
+    } else {
+      Server.journal.error(`Config file "${path_config}" not found`);
+      insufficient_arguments(INTERNAL_OBJVARS.INTERNAL_SIG_INSUFFICIENT_ARGS);
+    }
+  }
+  return _terminal_arguments;
 }
 
 function __asmx_inizialize_fn() {
@@ -481,6 +709,7 @@ function __asmx_inizialize_fn() {
   argv.shift();
   argv.shift();
   INTERNAL_ARGV = argv;
+  const toProp = (str) => str.replaceAll('-', '_');
 
   process.title = 'AsmX G3 (AsmX Generation 3) Programming Language';
   process.env.NODE_ENV = 'production';
@@ -506,12 +735,24 @@ function __asmx_inizialize_fn() {
   // NFG - Name Flag
   // RF-NFG - Raw Full Name Flag
   INTERNAL_OBJVARS.TTY_NFG_DEFAULT = 'default';
+  INTERNAL_OBJVARS.TTY_NFG_INPUT_FILE_INTERNAL_PARAMETER_BY_NON_MULTIBOOT_MODE = 'default';
   INTERNAL_OBJVARS.TTY_NFG_CFGFILE = 'file';
   INTERNAL_OBJVARS.TTY_NFG_PROFILE_TIME = 'profiletime';
   INTERNAL_OBJVARS.TTY_NFG_COMPILE_RELEASE_MODE = 'release';
+  INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTIBOOT_MODE = 'multiboot';
+  INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTICLEAN_MODE = 'multiclean';
+  INTERNAL_OBJVARS.TTY_NFG_SOURCE_FILE = 'source';
+  INTERNAL_OBJVARS.TTY_NFG_HEADER_FILE = 'header';
+  INTERNAL_OBJVARS.TTY_NFG_OUTNAME_FILE = 'objname';
   INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE = 'target';
-  INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA = 'export_json_isa';
+  INTERNAL_OBJVARS.TTY_NFG_SPECIFY_FEATURES_CPU = 'features';
+  INTERNAL_OBJVARS.TTY_NFG_SPECIFY_GET_FEATURES_CPU = toProp('features-list');
+  INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA = toProp('export-json-isa');
   INTERNAL_OBJVARS.TTY_NFG_QUIET = 'quiet';
+  INTERNAL_OBJVARS.TTY_NFG_VERBOSE_COMMON = toProp('verbose-common');
+  INTERNAL_OBJVARS.TTY_NFG_VERBOSE_HWC = toProp('verbose-hwc');
+  INTERNAL_OBJVARS.TTY_NFG_VERBOSE_DRIVER = toProp('verbose-driver');
+  INTERNAL_OBJVARS.TTY_NFG_TRACEBACK_HWC = toProp('traceback-hwc');
   INTERNAL_OBJVARS.TTY_NFG_PACKAGE = 'package';
   INTERNAL_OBJVARS.TTY_NFG_PACKAGE_TYPE = 'package_type';
   INTERNAL_OBJVARS.TTY_RF_NFG_PACKAGE_TYPE = '--package-type';
@@ -543,6 +784,15 @@ function __asmx_inizialize_fn() {
   GVE.JournalService = JournalService;
 }
 
+function __fix_deflection__source_file_extension(filename) {
+  if (filename.endsWith('.')) {
+    return INTERNAL_OBJVARS.GCR_SUPPORT_FILE_DEFEXT_WDOT;
+  } else if (!INTERNAL_OBJVARS.GCR_SUPPORT_FILE_EXTS.map(ft => filename.endsWith(ft)).some(Boolean)) {
+    return INTERNAL_OBJVARS.GCR_SUPPORT_FILE_DEFEXT;
+  }
+  return "";
+}
+
 async function __asmx_startup_main_fn() {
   insufficient_arguments(INTERNAL_ARGV[0], helper);
 
@@ -551,32 +801,7 @@ async function __asmx_startup_main_fn() {
     terminal_arguments = tapi.parse(...INTERNAL_ARGV);
   }));
 
-  let path_config = null;
-
-  if (terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_DEFAULT) && terminal_arguments.default != null) {
-    path_config = terminal_arguments.default.startsWith(INTERNAL_OBJVARS.TTY_SYMBOL_MENTION) ? terminal_arguments.default.slice(1) : null;
-  }
-
-  if (terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_CFGFILE)) {
-    path_config = terminal_arguments.file.startsWith(INTERNAL_OBJVARS.TTY_SYMBOL_MENTION) ? terminal_arguments.file.slice(1) : terminal_arguments.file;
-  }
-
-  if (path_config) {
-    Server.journal.info(`Using config file: ${path_config}`);
-    let exist_file_cfg = await __asmx_perf_file_exist_fn(path_config);
-    if (exist_file_cfg) {
-      const predefined_config = (await fs.promises.readFile(path_config, 'utf8')).trim();
-      terminal_arguments = tapi.parse(predefined_config);
-      delete predefined_config;
-    } else {
-      Server.journal.error(`Config file "${path_config}" not found`);
-      insufficient_arguments(INTERNAL_OBJVARS.INTERNAL_SIG_INSUFFICIENT_ARGS);
-    }
-  }
-
-  if (terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_QUIET)) {
-    GVE.JournalService.journal.setQuiet(true);
-  }
+  terminal_arguments = await __asmx_if_init_config_file_fn(terminal_arguments);
 
   GVE.DEFERRED_PROFILE_STAGES.push(__asmx_deferred_measurement_profile_stage_fn('__asmx_init_system<std::sys::unix::process::init>', () => {
     Server.journal.log('Process ID: ' + process.pid);
@@ -585,18 +810,21 @@ async function __asmx_startup_main_fn() {
   }));
 
   __asmx_prepare_pipeline_factory_fn(terminal_arguments);
+  __asmx_settngs_pipeline_factory_fn(terminal_arguments);
   tapi.exec(terminal_arguments);
-  insufficient_arguments(terminal_arguments.default, helper);
 
-  if (terminal_arguments.default.endsWith('.')) {
-    terminal_arguments.default += INTERNAL_OBJVARS.GCR_SUPPORT_FILE_DEFEXT_WDOT;
-  } else if (!INTERNAL_OBJVARS.GCR_SUPPORT_FILE_EXTS.map(ft => terminal_arguments.default.endsWith(ft)).some(Boolean)) {
-    terminal_arguments.default += INTERNAL_OBJVARS.GCR_SUPPORT_FILE_DEFEXT;
+  if (terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTIBOOT_MODE] == undefined) {
+    insufficient_arguments(terminal_arguments.default, helper);
+    terminal_arguments.default += __fix_deflection__source_file_extension(terminal_arguments.default);
+  } else {
+    terminal_arguments.source = terminal_arguments.source.map(fx => fx += __fix_deflection__source_file_extension(fx));
   }
 
   Runtime.TERMINAL_ARGV = terminal_arguments;
   INTERNAL_OBJVARS.TTY_ARGUMENTS = terminal_arguments;
   GVE.TTY_ARGUMENTS = terminal_arguments;
+
+  Runtime.INTERNAL_OBJVARS = INTERNAL_OBJVARS;
 
   if (INTERNAL_OBJVARS.TTY_ARGUMENTS?.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_PROFILE_TIME)) {
     for (const stage of GVE.DEFERRED_PROFILE_STAGES) {
@@ -617,88 +845,18 @@ async function __asmx_startup_main_fn() {
   });
 
   if (Runtime.TERMINAL_ARGV?.[INTERNAL_OBJVARS.TTY_NFG_COMPILE_RELEASE_MODE]) {
-    if (!terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE)) {
-      Server.journal.error(`The --${INTERNAL_OBJVARS.TTY_NFG_COMPILE_RELEASE_MODE} option requires the --${INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE} option`);
-      insufficient_arguments(INTERNAL_OBJVARS.INTERNAL_SIG_NOT_INSUFFICIENT_ARGS);
+    if (Runtime.TERMINAL_ARGV?.[INTERNAL_OBJVARS.TTY_NFG_COMPILE_MULTIBOOT_MODE]) {
+      __asmx_record_multiboot_artifacts(terminal_arguments);
     }
 
-    if ((await __asmx_perf_file_exist_fn(INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_TARGETS)).valueOf() == false) {
-      Server.journal.error(`The ${INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_TARGETS} directory does not exist`);
-      Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-      __asmx_procexit();
-    }
+    const supervisor = new Supervisor(terminal_arguments, INTERNAL_OBJVARS, {
+      __asmx_perf_file_exist_fn,
+      __asmx_procexit,
+      insufficient_arguments,
+      help_package
+    });
 
-    const PATH_COMPILER_CORE = path.join(
-      INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_TARGETS,
-      terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE],
-      INTERNAL_OBJVARS.INTERNAL_STD_BACKEND_COMPILER_CORENAME
-    );
-
-    if (!(await __asmx_perf_file_exist_fn(PATH_COMPILER_CORE))) {
-      Server.journal.error(`The compiler core for the ${terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_SPECIFY_TARGET_CPU_ARCHITECTURE]} architecture does not exist`);
-      Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-      __asmx_procexit();
-    }
-
-    const compiler_core = require(PATH_COMPILER_CORE);
-
-    if (Object.getOwnPropertyNames(compiler_core.prototype).includes(INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS) == false) {
-      Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-      __asmx_procexit();
-    }
-
-    const constructor = new compiler_core;
-
-    if ((constructor[INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS] instanceof Function) == false) {
-      Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-      __asmx_procexit();
-    }
-
-    const outname = Reflect.ownKeys(terminal_arguments).includes('objname') ? terminal_arguments.objname : INTERNAL_OBJVARS.GCR_DEFAULT_OUTPUT_FILENAME_FOR_ALL_BACKENDS;
-    const compiler_parameters = {...terminal_arguments, compilation_mode: Runtime.ZCC_COMPILATION_MODE, objname: outname};
-    await constructor[INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS](terminal_arguments.default, compiler_parameters);
-    await GVE.JournalService.journal.printWarningStats();
-
-    if (terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_PACKAGE)) {
-      if (!terminal_arguments.hasOwnProperty(INTERNAL_OBJVARS.TTY_NFG_PACKAGE_TYPE)) {
-        Server.journal.error(`The --${INTERNAL_OBJVARS.TTY_NFG_PACKAGE} option requires the ${INTERNAL_OBJVARS.TTY_RF_NFG_PACKAGE_TYPE} option`);
-        insufficient_arguments(INTERNAL_OBJVARS.INTERNAL_SIG_NOT_INSUFFICIENT_ARGS, help_package);
-      }
-
-      if ((await __asmx_perf_file_exist_fn(INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_PACKAGES)).valueOf() == false) {
-        Server.journal.error(`The ${INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_PACKAGES} directory does not exist`);
-        Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-        __asmx_procexit();
-      }
-
-      const PATH_PACKAGE_DRIVER = path.join(
-        INTERNAL_OBJVARS.INTERNAL_PATH_BACKEND_PACKAGES,
-        INTERNAL_OBJVARS.GCR_DEFAULT_ZGEN_DRIVER_FILENAME
-      );
-
-      if (!(await __asmx_perf_file_exist_fn(PATH_PACKAGE_DRIVER))) {
-        Server.journal.error(`The package driver not found`);
-        Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-        __asmx_procexit();
-      }
-
-      const package_driver = require(PATH_PACKAGE_DRIVER);
-
-      if (Object.getOwnPropertyNames(package_driver.prototype).includes(INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS) == false) {
-        Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-        __asmx_procexit();
-      }
-
-      const driver = new package_driver;
-
-      if ((driver[INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS] instanceof Function) == false) {
-        Server.journal.error(INTERNAL_OBJVARS.INTERNAL_SYSERR);
-        __asmx_procexit();
-      }
-
-      driver[INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS](terminal_arguments);
-    }
-
+    await supervisor.run();
   } else {
     const PATH_JITC = path.join(__dirname, `./${INTERNAL_OBJVARS.INTERNAL_STD_JITC_COMPILER_CORENAME}`);
 
@@ -725,6 +883,8 @@ async function __asmx_startup_main_fn() {
     const jitc_parameters = { ...terminal_arguments, compilation_mode: Runtime.JCC_COMPILATION_MODE };
     jitc[INTERNAL_OBJVARS.GCR_RUN_METHOD_NAME_FOR_ALL_BACKENDS](terminal_arguments.default, jitc_parameters);
   }
+
+  Server.journal.rawError(`Cached ${Reflect.ownKeys(Module._pathCache).length.toString()} files`);
 }
 
 function __asmx_procexit() {

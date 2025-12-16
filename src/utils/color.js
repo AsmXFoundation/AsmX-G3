@@ -18,6 +18,10 @@ Color.FG_CYAN = "[36m";
 Color.FG_WHITE = "[37m";
 Color.FG_GRAY = "[90m";
 
+Color.FG_BLINK_BRIGHT_ORANGE = "\x1b[5m\x1b[38:5:214m";
+Color.FG_BLINK_MEDIUM_ORANGE = "\x1b[5m\x1b[38:5:208m";
+Color.FG_BLINK_DARKER_ORANGE = "\x1b[5m\x1b[38:5:166m";
+
 Color.BG_BLACK = "[40m";
 Color.BG_RED = "[41m";
 Color.BG_GREEN = "[42m";

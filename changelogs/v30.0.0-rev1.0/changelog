@@ -1,0 +1,161 @@
+# Changelog v30.0.0-rev1.0
+
+**Release date:** December 23, 2025
+**Target:** AsmX G3 Compiler — v30.0.0 (revision 1.0)
+
+---
+
+## Overview
+
+v30.0.0-rev1.0 is a major milestone for AsmX G3. This release rethinks the developer experience around assembling, packaging, and building low-level systems by introducing a Supervisor-driven, multi-artifact build mode, first-class mutable data support, a broad expansion of x86-64 ISA support (including modern security and virtualization primitives), richer packaging primitives, and numerous internal robustness and layout fixes. The release is the product of an intensive three-month engineering sprint and is designed to let developers build everything from a bootloader to kernel modules and shared libraries in a single, consistent workflow.
+
+---
+
+## Highlights
+
+* **One command to build many artifacts:** `--multiboot` enables batched compilation of multiple independent sources (ELF, .so, .ko, raw binaries) in a single invocation. The Supervisor coordinates parallel sub-jobs and applies common flags automatically.
+* **Atomic multi-artifact cleanup:** `--multiclean` removes all artifacts created by any `--multiboot` run (object files, kernel modules, shared objects, temporary files) in one atomic command.
+* **First-class mutable data:** `.data` section support for user variables — relocations and alignment handled automatically; compiler errors on duplicate symbol declarations to prevent accidental redefinition.
+* **Expanded x86-64 ISA:** Core 64-bit instructions (inc/dec, movsxd, push variants, nop, pushf/popf, hlt, cmc/clc/stc, cli/sti, cld/std, lahf/sahf) plus many modern CPU features (IBT/endbr64, SMAP, PKU, RDTSC/RDTSCP, SMX, WBNOINVD, PCONFIG, SERIALIZE, IBHF, WRMSRNS, MSRLIST, MCOMMIT, RDPRU, MONITOR/MWAIT variants, TSX load-tracking primitives) — enabling building production kernel code and drivers without external assemblers.
+* **Kernel module (.ko) support from pure AsmX:** `modinfo` section and metadata are accepted by the compiler; produced `.ko` carries proper vermagic/retpoline fields and is loadable with `insmod`. This empowers writing real kernel modules in AsmX without intermediary C glue.
+
+---
+
+## New Features
+
+### CLI & Build / Supervisor
+
+* `--multiboot` — batch/packet compilation mode. Each `--source <file> -o <output>` becomes an independent subjob under Supervisor; common CLI flags apply to all subjobs automatically (for example, `--release`, `--target`, `--features`). The Supervisor keeps the overall run resilient: if one subjob fails, the rest continue so you can inspect partial results instead of restarting the entire build.
+* `--multiclean` — atomically cleans every artifact previously produced by any `--multiboot` run (object files, `.ko`, `.so`, temporary build dirs) so CI/CD workflows and local development have a single deterministic cleaning command.
+* CLI help and options expanded: new compiler option grouping; `--features` and `--features-list` to enumerate/require CPU feature sets; `-t/--target` and `-m/--march` clarified; new `--export-json-isa` to export the ISA mapping. (Help text and README examples updated accordingly.)
+Packaging mode limitation
+* The `--package` pipeline (for example, building `.deb` archives) is intentionally restricted to **single-source build mode**. Packaging is **not supported in** `--multiboot` **mode**, since package metadata (name, version, control files, install layout) must be resolved against a single, deterministic build artifact.
+
+### Language and Syntax
+
+* Function calls may be written without parentheses in many cases (e.g., `@call my_function`) to keep code visually close to instruction flow while remaining unambiguous for the parser. This makes inline calls look like native instructions and reduces syntactic noise. Future support for `my_function()` notation is planned; current design preserves backward compatibility.
+* `static` functions are supported, enabling internal/private function linkage and better module encapsulation. Example sources and `examples/` have been added to demonstrate usage.
+
+### Data Model
+
+* `.data` section support: mutable variables are now placed into `.data` automatically with correct relocations and alignments. This enables purely-AsmX static state (counters, buffers, tunables) without C interop hacks. The compiler enforces single-definition semantics for data symbols — attempting to redefine an existing variable will produce a compilation error.
+
+### Examples and Templates
+
+* New example code added: `examples/compile.asmx`, `examples/libm.asmx`, `examples/libm_test.c`, and `examples/simple_driver.asmx` that illustrate:
+
+  * Syscall wrappers and syscall usage,
+  * Building a shared library and testing it with C,
+  * Minimal kernel module code with `modinfo` section for direct `insmod` usage.
+
+---
+
+## Instruction Set & Hardware Features (ISA)
+
+This release substantially broadens x86-64 instruction coverage to support writing real kernel and system code:
+
+* **Core 64-bit semantics:** `inc/dec` (r/m8, r/m16, r/m32, r/m64), `movsxd` (32→64 sign-extend variants), complete `push` family (register forms, immediate forms, segment pushes), `nop`, `pushf`/`popf`, `hlt`, `cmc`/`clc`/`stc`, `cli`/`sti`, `cld`/`std`, `lahf`/`sahf`. These are assembled with correct REX handling and operand-size encodings.
+
+* **Security & virtualization primitives:** implemented or integrated:
+
+  * **IBT / endbr64** (CET) for Indirect Branch Tracking.
+  * **SMAP / clac / stac** and **PKU / rdpkru/wrpkru** for memory protections and in-kernel safe access. 
+  * **RDTSC / RDTSCP**, **SMX/getsec**, **WBNOINVD**, **PCONFIG**, **SERIALIZE**, **IBHF**, **WRMSRNS**,**MSRLIST**, **MONITOR/MWAIT[ X ]**, **RDPRU**, **MCOMMIT**, and TSX address-tracking helpers.(Many have been validated on AMD Ryzen and Intel 12/13/14th gen hardware, and in QEMU.)
+
+These features allow AsmX G3 to produce production-grade kernel components and low-level services that leverage modern CPU features for performance and hardening.
+
+* **ISA feature gating** The `--features` flag explicitly controls which ISA extensions are enabled for the current build. For example, `--features vmx,smap` enables Intel VMX and SMAP instruction groups.
+Using `--features all` enables **all supported ISA extensions** for the selected target architecture. When a feature is enabled, the compiler becomes aware of the corresponding instruction set and **will not emit** `unknown instruction` **errors** for those instructions.
+
+* **Discovering available ISA extensions** The --features-list command allows inspecting which ISA extensions are available for a given target.
+  Example:
+    ```sh
+    $ asmx --features-list amd64
+    ```
+    Output includes the detected platform, architecture, and the full list of supported ISA extensions and instruction groups available to the compiler.
+    ```
+    Process ID: 21142
+    Welcome, AsmX G3 (AsmX Generation 3)
+    i Linux (linux 6.17.9) amd64
+
+    Features (26 features / 42 instructions):
+    shstk ibt cet smx rdtscp tsc smap pku wbnoinvd pconfig serialize ibhf
+    wrmsrns msrlist pbndkb monitor monitorx rdpru mcommit invlpgb tsxldtrk
+    lahf_lm sse1 sse2 vmx
+    ```
+
+---
+
+## Kernel Module Support
+
+* Native support for building Linux kernel modules from AsmX source via a `modinfo` section. The compiler injects `vermagic`, `retpoline` flags, and other required metadata to make the result loadable via `insmod` and visible via `modinfo`. The release includes an example (`simple_driver.asmx`) and demonstrates `insmod`/`rmmod`/`dmesg` validation. This removes the historical requirement to write a C wrapper and supports fully assembler-implemented kernel modules.
+
+---
+
+## Internal Improvements & Bug Fixes
+
+### Parser / AST / Builder fixes
+
+* The instruction/AST builder code has been hardened to better detect and handle argumentless instructions and different atomic expression types. Specific builder functions (e.g., `zcc_build_fn_instruction`, `zcc_build_generic_instruction`) were extended to correctly populate `name`, `arguments`, `body`, and the new `returnTypeOfValue` fields when present. This reduces earlier null dereference cases and improves correctness of function node shapes.
+* Enhanced recursive descent parser with optional chaining for safer AST handling, preventing crashes on operand-less instructions.
+* Updated syntax scanner for better handling of sections (added `bss` and `modinfo`), functions, syscalls, and calls.
+* Added ellipsis token type (`...`) for future variadic support.
+
+### Linker / Relocation / Sections
+
+* Relocation and finalization logic for ET_REL/ET_EXEC/ET_DYN formats was revised:
+
+  * The linker strategies now proactively discover and create `.rela*` sections during an early "prepareRelocationData" pass so they are accounted for in final layouts.
+  * RELA entries building was corrected to compute `r_offset`, `r_info`, and `r_addend` safely, and to populate PLT/GOT structures consistently, including robust handling of JUMP_SLOT and dynamic relocations. This fixes cases where missing relocation containers caused mislinked objects and runtime faults.
+
+### Miscellaneous fixes
+
+* Help / CLI messaging updated to reflect v30 and new flags. `dumpversion()` prints `v30 (rev 1.0)`. Alias and README examples were expanded to cover multiboot, multiclean, kernel module building, and shared library creation.
+
+---
+
+## Compatibility & Migration Notes
+
+* `--target` (`-t`) is the canonical flag to specify architecture targets (e.g., `amd64`). `-m/--march` remains available for microarchitecture details but scripts should prefer `--target` for portability.
+* Existing build scripts that expect a single input and a single output should be adapted where convenient to `--multiboot` groups (`--source <file> -o <out>` repeated). `--multiboot` is fully backward compatible — single-source invocations still work unchanged.
+* The `.data` section introduces a stricter symbol model: duplicate variable declarations now produce an error. Audit your source repos for accidental duplicate symbols when migrating to v30.
+
+---
+
+## Developer Impact
+
+* Faster CI: `--multiboot` + `--multiclean` removes the need for large Makefiles or external packaging scripts in many projects, shrinking CI pipeline complexity dramatically. Example CI snippet in the docs shows a fully working build in ~3–5 lines.
+* Greater expressiveness: with `.data` and richer ISA, developers can now keep more code and state in pure AsmX without fallback to C glue. Kernel devs can prototype and ship production modules written entirely in AsmX.
+
+---
+
+## Examples & Quickstart
+
+* Build multiple artifacts in one command:
+
+```sh
+asmx --multiboot --release --target amd64 --features all \
+  --source boot.asmx -o boot \
+  --source kernel.asmx -o vkernel \
+  --source nvme_driver.asmx -o nvme.ko \
+  --source libc.asmx -o libc.so
+```
+
+* Clean everything produced by `--multiboot` runs:
+
+```sh
+asmx --multiclean
+```
+
+* Build a kernel module example:
+
+```sh
+asmx ./examples/simple_driver.asmx --release --target amd64 -o fireware.ko --features all --emergency-panic --verbose-common 10
+sudo insmod fireware.ko
+sudo rmmod fireware.ko
+dmesg | tail -n 5
+```
+
+See `examples/` for full working source and a `libm` sample demonstrating shared object creation and a C test harness.
+
+---

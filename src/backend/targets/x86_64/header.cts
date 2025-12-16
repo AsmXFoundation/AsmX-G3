@@ -29,6 +29,7 @@ interface MemoryOperand {
   index?: Register;
   scale?: 1 | 2 | 4 | 8;
   displacement?: number;
+  segment?: Register;  // e.g., 'fs', 'gs' (Sreg)
   ripRelative?: boolean; // For RIP-relative addressing
 }
 
@@ -139,7 +140,7 @@ interface InstructionVariant {
 }
 
 interface InstructionDefinition {
-  mnemonic: string | InstructionNameTags;
+  mnemonic: string;
   variants: InstructionVariant[];
 }
 
@@ -148,71 +149,33 @@ interface CommonRegisterInformationInterface {
   size: OperandSize;
   highByte?: boolean,
   requiresRex?: boolean
+  isExtended?: boolean;  // NEW: true for r8-r15 (requires R/B/X=1 for +8), false for other registers
 }
 
 interface CommonRegisterInterface {
   [key: Register]: CommonRegisterInformationInterface
 }
 
-declare enum InstructionNameTags {
-  add,
-  or,
-  adc,
-  sbb,
-  and,
-  sub,
-  xor,
-  cmp,
-  push,
-  pop,
-  movsxd,
-  imul,
-  ins,
-  insb,
-  insw,
-  insd,
-  outs,
-  outsb,
-  outsw,
-  outsd,
-  jo,
-  jno,
-  jb,
-  jnae,
-  jc,
-  jnb,
-  jae,
-  jnc,
-  jz,
-  je,
-  jnz,
-  jne,
-  jbe,
-  jna,
-  jnbe,
-  ja,
-  js,
-  jns,
-  jp,
-  jpe,
-  jnp,
-  jpo,
-  jl,
-  jnge,
-  jnl,
-  jge,
-  jle,
-  jng,
-  jnle,
-  jg,
-  test,
-  xchg,
-  mov,
-  lea,
-  nop,
-  pause,
-}
 
+abstract class AssemblyInstructionDescriptorTableBase {
+  public static instructionSet: Map<string, InstructionDefinition> = new Map();
+  public static registerInformation: CommonRegisterInterface = {};
+
+  public static defineInstructions(): void {};
+
+  // instructions_without_operands_map
+  public static mkinstr_without_operands(mnemonic: string, opcode: number[]): InstructionDefinition {
+    return { mnemonic, variants: [{opcode, operands: []}]};
+  }
+
+  public static getInstructionSet(): Map<string, InstructionDefinition> {
+    return this.instructionSet;
+  }
+
+  public static getRegisterInformation(): CommonRegisterInterface {
+    return this.registerInformation;
+  }
+}
 
 export {
   OperandType,
@@ -227,7 +190,7 @@ export {
   OperandEncoding,
   InstructionVariant,
   InstructionDefinition,
-  InstructionNameTags,
   CommonRegisterInformationInterface,
-  CommonRegisterInterface
+  CommonRegisterInterface,
+  AssemblyInstructionDescriptorTableBase,
 }

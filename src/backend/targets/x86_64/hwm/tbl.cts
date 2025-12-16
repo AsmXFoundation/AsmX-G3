@@ -9,12 +9,11 @@ import {
   OperandEncoding,
   InstructionVariant,
   InstructionDefinition,
-  InstructionNameTags
 } from "../header.cjs";
 
 import fs from "fs";
 
-export class AssemblyInstructionDescriptorTable {
+class AssemblyInstructionDescriptorTable {
   private static instructionSet: Map<string, InstructionDefinition> = new Map();
 
   public static defineInstructions() {
@@ -32,7 +31,6 @@ export class AssemblyInstructionDescriptorTable {
 
     arithmeticInstructions.forEach(([mnemonic, baseOpcode], index) => {
       const modrmRegExtension = index;
-
       const def: InstructionDefinition = {
         mnemonic: mnemonic.toUpperCase(),
         variants: [
@@ -208,239 +206,356 @@ export class AssemblyInstructionDescriptorTable {
         ]
       };
       this.instructionSet.set(mnemonic.toLowerCase(), def);
-
-
-      const movDef: InstructionDefinition = {
-        mnemonic: 'MOV',
-        variants: [
-          // 88 /r: MOV r/m8, r8
-          {
-            opcode: [0x88],
-            requiresMatchingRegMemSizes: true,
-            operationSizeMode: 'ExplicitByte',
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.ModRM_Reg }
-            ]
-          },
-          // 89 /r: MOV r/m16/32/64, r16/32/64
-          {
-            opcode: [0x89],
-            requiresMatchingRegMemSizes: true,
-            operationSizeMode: 'FromFirstRegMem',
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Reg, size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_Reg }
-            ]
-          },
-          // 8A /r: MOV r8, r/m8
-          {
-            opcode: [0x8A],
-            requiresMatchingRegMemSizes: true,
-            operationSizeMode: 'ExplicitByte',
-            operands: [
-              { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.ModRM_Reg },
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM }
-            ]
-          },
-          // 8B /r: MOV r16/32/64, r/m16/32/64
-          {
-            opcode: [0x8B],
-            requiresMatchingRegMemSizes: true,
-            operationSizeMode: 'FromFirstRegMem',
-            operands: [
-              { type: OperandType.Reg, size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_Reg },
-              { type: [OperandType.Reg, OperandType.Mem], size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_RM }
-            ]
-          },
-          // B0+rb ib: MOV r8, imm8
-          {
-            opcode: [0xB0],
-            operationSizeMode: 'ExplicitByte',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Byte,
-            operands: [
-              { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.OpcodeReg },
-              { type: OperandType.Imm, size: OperandSize.Byte, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // B8+rw iw: MOV r16, imm16
-          {
-            opcode: [0xB8],
-            operationSizeMode: 'ExplicitWord',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Word,
-            operands: [
-              { type: OperandType.Reg, size: OperandSize.Word, encoding: OperandEncoding.OpcodeReg },
-              { type: OperandType.Imm, size: OperandSize.Word, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // B8+rd id: MOV r32, imm32
-          {
-            opcode: [0xB8],
-            operationSizeMode: 'ExplicitDword',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Dword,
-            operands: [
-              { type: OperandType.Reg, size: OperandSize.Dword, encoding: OperandEncoding.OpcodeReg },
-              { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // REX.W + C7 /0 id: MOV r/m64, imm32 (sign-extended)
-          // This is the preferred way to move a small immediate into a 64-bit register.
-          {
-            opcode: [0xC7],
-            modrmRegExtension: 0,
-            operationSizeMode: 'ExplicitQword',
-            immediateType: 'FixedSize', // Immediate is always 32-bit for this encoding
-            fixedImmediateSize: OperandSize.Dword,
-            requiresRexW: true,
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Qword, encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // REX.W + B8+rd io: MOV r64, imm64
-          // This should only be chosen when the immediate is larger than a 32-bit signed value.
-          {
-            opcode: [0xB8],
-            operationSizeMode: 'ExplicitQword',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Qword,
-            requiresRexW: true,
-            operands: [
-              { type: OperandType.Reg, size: OperandSize.Qword, encoding: OperandEncoding.OpcodeReg },
-              { type: OperandType.Imm, size: OperandSize.Qword, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // C6 /0 ib: MOV r/m8, imm8
-          {
-            opcode: [0xC6],
-            modrmRegExtension: 0,
-            operationSizeMode: 'ExplicitByte',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Byte,
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Imm, size: OperandSize.Byte, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // C7 /0 iw: MOV r/m16, imm16
-          {
-            opcode: [0xC7],
-            modrmRegExtension: 0,
-            operationSizeMode: 'ExplicitWord',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Word,
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Word, encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Imm, size: OperandSize.Word, encoding: OperandEncoding.Immediate }
-            ]
-          },
-          // C7 /0 id: MOV r/m32, imm32
-          {
-            opcode: [0xC7],
-            modrmRegExtension: 0,
-            operationSizeMode: 'ExplicitDword',
-            immediateType: 'FixedSize',
-            fixedImmediateSize: OperandSize.Dword,
-            operands: [
-              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM },
-              { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
-            ]
-          },
-        ]
-      };
-      this.instructionSet.set('mov', movDef);
-
-      const leaDef: InstructionDefinition = {
-        mnemonic: 'LEA',
-        variants: [
-          // 8D /r: LEA r16/32/64, m
-          {
-            opcode: [0x8D],
-            operationSizeMode: 'FromFirstRegMem',
-            requiresMatchingRegMemSizes: false, 
-            operands: [
-              { 
-                type: OperandType.Reg,
-                size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword],
-                encoding: OperandEncoding.ModRM_Reg
-              },
-              { 
-                type: OperandType.Mem, 
-                // The size of the memory operand for LEA doesn't affect the operation size,
-                // which is determined by the destination register.
-                size: [OperandSize.Byte, OperandSize.Word, OperandSize.Dword, OperandSize.Qword],
-                encoding: OperandEncoding.ModRM_RM
-              }
-            ]
-          }
-        ]
-      };
-      this.instructionSet.set('lea', leaDef);
     });
 
-    const instructions_without_operands_map: InstructionDefinition[] = [
+    const movDef: InstructionDefinition = {
+      mnemonic: 'MOV',
+      variants: [
+        // 88 /r: MOV r/m8, r8
+        {
+          opcode: [0x88],
+          requiresMatchingRegMemSizes: true,
+          operationSizeMode: 'ExplicitByte',
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.ModRM_Reg }
+          ]
+        },
+        // 89 /r: MOV r/m16/32/64, r16/32/64
+        {
+          opcode: [0x89],
+          requiresMatchingRegMemSizes: true,
+          operationSizeMode: 'FromFirstRegMem',
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Reg, size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_Reg }
+          ]
+        },
+        // 8A /r: MOV r8, r/m8
+        {
+          opcode: [0x8A],
+          requiresMatchingRegMemSizes: true,
+          operationSizeMode: 'ExplicitByte',
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.ModRM_Reg },
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM }
+          ]
+        },
+        // 8B /r: MOV r16/32/64, r/m16/32/64
+        {
+          opcode: [0x8B],
+          requiresMatchingRegMemSizes: true,
+          operationSizeMode: 'FromFirstRegMem',
+          operands: [
+            { type: OperandType.Reg, size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_Reg },
+            { type: [OperandType.Reg, OperandType.Mem], size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_RM }
+          ]
+        },
+        // B0+rb ib: MOV r8, imm8
+        {
+          opcode: [0xB0],
+          operationSizeMode: 'ExplicitByte',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Byte,
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Byte, encoding: OperandEncoding.OpcodeReg },
+            { type: OperandType.Imm, size: OperandSize.Byte, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // B8+rw iw: MOV r16, imm16
+        {
+          opcode: [0xB8],
+          operationSizeMode: 'ExplicitWord',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Word,
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Word, encoding: OperandEncoding.OpcodeReg },
+            { type: OperandType.Imm, size: OperandSize.Word, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // B8+rd id: MOV r32, imm32
+        {
+          opcode: [0xB8],
+          operationSizeMode: 'ExplicitDword',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Dword,
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Dword, encoding: OperandEncoding.OpcodeReg },
+            { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // REX.W + C7 /0 id: MOV r/m64, imm32 (sign-extended)
+        // This is the preferred way to move a small immediate into a 64-bit register.
+        {
+          opcode: [0xC7],
+          modrmRegExtension: 0,
+          operationSizeMode: 'ExplicitQword',
+          immediateType: 'FixedSize', // Immediate is always 32-bit for this encoding
+          fixedImmediateSize: OperandSize.Dword,
+          requiresRexW: true,
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Qword, encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // REX.W + B8+rd io: MOV r64, imm64
+        // This should only be chosen when the immediate is larger than a 32-bit signed value.
+        {
+          opcode: [0xB8],
+          operationSizeMode: 'ExplicitQword',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Qword,
+          requiresRexW: true,
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Qword, encoding: OperandEncoding.OpcodeReg },
+            { type: OperandType.Imm, size: OperandSize.Qword, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // C6 /0 ib: MOV r/m8, imm8
+        {
+          opcode: [0xC6],
+          modrmRegExtension: 0,
+          operationSizeMode: 'ExplicitByte',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Byte,
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Imm, size: OperandSize.Byte, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // C7 /0 iw: MOV r/m16, imm16
+        {
+          opcode: [0xC7],
+          modrmRegExtension: 0,
+          operationSizeMode: 'ExplicitWord',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Word,
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Word, encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Imm, size: OperandSize.Word, encoding: OperandEncoding.Immediate }
+          ]
+        },
+        // C7 /0 id: MOV r/m32, imm32
+        {
+          opcode: [0xC7],
+          modrmRegExtension: 0,
+          operationSizeMode: 'ExplicitDword',
+          immediateType: 'FixedSize',
+          fixedImmediateSize: OperandSize.Dword,
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM },
+            { type: OperandType.Imm, size: OperandSize.Dword, encoding: OperandEncoding.Immediate }
+          ]
+        },
+      ]
+    };
+    this.instructionSet.set('mov', movDef);
+
+    const leaDef: InstructionDefinition = {
+      mnemonic: 'LEA',
+      variants: [
+        // 8D /r: LEA r16/32/64, m
+        {
+          opcode: [0x8D],
+          operationSizeMode: 'FromFirstRegMem',
+          requiresMatchingRegMemSizes: false,
+          operands: [
+            {
+              type: OperandType.Reg,
+              size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword],
+              encoding: OperandEncoding.ModRM_Reg
+            },
+            {
+              type: OperandType.Mem,
+              // The size of the memory operand for LEA doesn't affect the operation size,
+              // which is determined by the destination register.
+              size: [OperandSize.Byte, OperandSize.Word, OperandSize.Dword, OperandSize.Qword],
+              encoding: OperandEncoding.ModRM_RM
+            }
+          ]
+        }
+      ]
+    };
+    this.instructionSet.set('lea', leaDef);
+
+    const movsxdDef: InstructionDefinition = {
+      mnemonic: 'movsxd',
+      variants: [
+        // 63 /r: MOVSXD r32, r/m32
+        {
+          opcode: [0x63],
+          operationSizeMode: 'ExplicitDword',
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Dword, encoding: OperandEncoding.ModRM_Reg },
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM }
+          ],
+        },
+        // 63 /r: MOVSXD r64, r/m32 (REX.W)
+        {
+          opcode: [0x63],
+          operationSizeMode: 'ExplicitQword',
+          operands: [
+            { type: OperandType.Reg, size: OperandSize.Qword, encoding: OperandEncoding.ModRM_Reg },
+            { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM }
+          ],
+        }
+      ]
+    };
+    this.instructionSet.set('movsxd', movsxdDef);
+
+    const pushDef: InstructionDefinition = {
+      mnemonic: 'push',
+      variants: [
+        // 50 + reg, REX.B: push r64
+        {
+          opcode: [0x50], // 0x50 + reg_code
+          operands: [
+            { type: OperandType.Reg, size: [OperandSize.Word, OperandSize.Qword], encoding: OperandEncoding.OpcodeReg }
+          ],
+          operationSizeMode: 'FromFirstRegMem', // 16/64-bit, with prefix 66h for 16-bit
+        },
+        // 68 iw/id: push imm16/32 (sign-extends to 64-bit)
+        {
+          opcode: [0x68],
+          operands: [
+            { type: OperandType.Imm, size: [OperandSize.Word, OperandSize.Dword], encoding: OperandEncoding.Immediate }
+          ],
+          operationSizeMode: 'ExplicitWord' // for 16-bit: prefix 66h; sign-extends to 64-bit
+        },
+        // 6A ib: push imm8 (sign-extends to 64-bit)
+        {
+          opcode: [0x6A],
+          operands: [
+            { type: OperandType.Imm, size: OperandSize.Byte, encoding: OperandEncoding.Immediate }
+          ],
+          operationSizeMode: 'ExplicitByte', // sign-extends imm8 to 64-bit
+          immediateType: 'SignExtendedByte'
+        },
+        // FF /6: push r/m16/32/64 (modrm /6)
+        {
+          opcode: [0xFF],
+          modrmRegExtension: 6,
+          operands: [
+            { type: [OperandType.Reg, OperandType.Mem], size: [OperandSize.Word, OperandSize.Dword, OperandSize.Qword], encoding: OperandEncoding.ModRM_RM }
+          ],
+          operationSizeMode: 'FromFirstRegMem' // 16/32/64-bit, with prefix 66h for 16-bit
+        },
+        // push FS (16-bit, zero-extends to 64-bit)
+        {
+          opcode: [0x0F, 0xA0],
+          operands: [
+            { type: OperandType.Sreg, encoding: OperandEncoding.Implicit, isImplicit: true, implicitReg: 'fs' }
+          ],
+          operationSizeMode: 'ExplicitDword',
+          disallowsRex: true
+        },
+        // push GS (16-bit, zero-extends to 64-bit)
+        {
+          opcode: [0x0F, 0xA8],
+          operands: [
+            { type: OperandType.Sreg, encoding: OperandEncoding.Implicit, isImplicit: true, implicitReg: 'gs' }
+          ],
+          operationSizeMode: 'ExplicitDword',
+          disallowsRex: true
+        }
+      ]
+    };
+    this.instructionSet.set('push', pushDef);
+
+    const arithmetic_instructions: InstructionDefinition[] = [
       {
-        mnemonic: 'nop',
+        mnemonic: 'inc',
         variants: [
+          // FE /0: INC r/m8
           {
-            opcode: [0x90],
-            operands: []
+            opcode: [0xfe],
+            modrmRegExtension: 0,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM }]
+          },
+          // FF /0: INC r/m16 (Requires 0x66 prefix usually handling by assembler engine)
+          {
+            opcode: [0xff],
+            modrmRegExtension: 0,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Word, encoding: OperandEncoding.ModRM_RM }]
+          },
+          // FF /0: INC r/m32
+          {
+            opcode: [0xff],
+            modrmRegExtension: 0,
+            operands: [
+              { type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM }
+            ]
+          },
+          // FF /0: INC r/m64 (Requires REX.W)
+          {
+            opcode: [0xff],
+            modrmRegExtension: 0,
+            requiresRexW: true,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Qword, encoding: OperandEncoding.ModRM_RM }]
           }
         ]
       },
+
       {
-        mnemonic: 'fwait',
+        mnemonic: 'dec',
         variants: [
+          // FE /1: DEC r/m8
           {
-            opcode: [0x9B],
-            operands: []
-          }
-        ]
-      },
-      {
-        mnemonic: 'pushf',
-        variants: [
+            opcode: [0xfe],
+            modrmRegExtension: 1,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Byte, encoding: OperandEncoding.ModRM_RM }]
+          },
+          // FF /1: DEC r/m16
           {
-            opcode: [0x9C],
-            operands: []
-          }
-        ]
-      },
-      {
-        mnemonic: 'popf',
-        variants: [
+            opcode: [0xff],
+            modrmRegExtension: 1,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Word, encoding: OperandEncoding.ModRM_RM }]
+          },
+          // FF /1: DEC r/m32
           {
-            opcode: [0x9D],
-            operands: []
-          }
-        ]
-      },
-      {
-        mnemonic: 'sahf',
-        variants: [
+            opcode: [0xff],
+            modrmRegExtension: 1,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Dword, encoding: OperandEncoding.ModRM_RM }]
+          },
+          // FF /1: DEC r/m64 (Requires REX.W)
           {
-            opcode: [0x9E],
-            operands: []
-          }
-        ]
-      },
-      {
-        mnemonic: 'lahf',
-        variants: [
-          {
-            opcode: [0x9F],
-            operands: []
+            opcode: [0xff],
+            modrmRegExtension: 1,
+            requiresRexW: true,
+            operands: [{ type: [OperandType.Reg, OperandType.Mem], size: OperandSize.Qword, encoding: OperandEncoding.ModRM_RM }]
           }
         ]
       }
     ];
 
+    for (const instruction_define of arithmetic_instructions) {
+      this.instructionSet.set(instruction_define.mnemonic as string, instruction_define);
+    };
+
+    const instructions_without_operands_map: InstructionDefinition[] = [
+      { mnemonic: 'nop', variants: [{ opcode: [0x90], operands: [] }] },
+      { mnemonic: 'pushf', variants: [{ opcode: [0x9C], operands: [] }] },
+      { mnemonic: 'popf', variants: [{ opcode: [0x9D], operands: [] }] },
+      { mnemonic: 'hlt', variants: [{ opcode: [0xf4], operands: [] }] },
+    ];
+
+    const instructions_flag_manipulations_map: InstructionDefinition[] = [
+      { mnemonic: 'cmc', variants: [{ opcode: [0xf5], operands: [] }] },
+      { mnemonic: 'clc', variants: [{ opcode: [0xf8], operands: [] }] },
+      { mnemonic: 'stc', variants: [{ opcode: [0xf9], operands: [] }] },
+      { mnemonic: 'cli', variants: [{ opcode: [0xfa], operands: [] }] },
+      { mnemonic: 'sti', variants: [{ opcode: [0xfb], operands: [] }] },
+      { mnemonic: 'cld', variants: [{ opcode: [0xfc], operands: [] }] },
+      { mnemonic: 'std', variants: [{ opcode: [0xfd], operands: [] }] },
+    ];
+
     for (const instruction_define of instructions_without_operands_map) {
       this.instructionSet.set(instruction_define.mnemonic as string, instruction_define);
-    }
+    };
+
+    for (const instruction_define of instructions_flag_manipulations_map) {
+      this.instructionSet.set(instruction_define.mnemonic as string, instruction_define);
+    };
   }
 
   public static getInstructionSet(): Map<string, InstructionDefinition> {
@@ -455,3 +570,5 @@ export class AssemblyInstructionDescriptorTable {
     fs.writeFileSync(_path, JSON.stringify(iset, null, 2));
   }
 }
+
+module.exports = AssemblyInstructionDescriptorTable;

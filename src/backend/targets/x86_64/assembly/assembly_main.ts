@@ -97,6 +97,26 @@ class impl_assembly_fn_base implements impl_assembly_fn_base {
   gen_body(body: Buffer) {
     this.fn_body = body;
   }
+
+  gen_exit_syscall(): Buffer {
+    // Generates a standard sys_exit(0) sequence.
+    return Buffer.from([
+      0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // movq $60, %rax (sys_exit)
+      0x48, 0xc7, 0xc7, 0x00, 0x00, 0x00, 0x00, // movq $0, %rdi (exit code)
+      0x0f, 0x05                                // syscall
+    ]);
+  }
+
+  impl() {
+    const buffer = Buffer.concat([
+      this.gen_prologue(),
+      this.gen_allocate_local_variables(),
+      this.fn_body,
+      this.gen_free_local_variables(),
+      this.gen_epilogue()
+    ]);
+    return buffer;
+  }
 }
 
 class impl_assembly_fn_call extends impl_assembly_fn_base {}
@@ -104,30 +124,12 @@ class impl_assembly_fn_pass_args_via_abi extends impl_assembly_fn_base {}
 
 // rettype main(T retqaddr, U argc, T1 argv, T2 envp, T3 auxv, T4 undefined_stackpalce)
 class impl_assembly_fn_main extends impl_assembly_fn_base {
-   gen_exit_syscall(): Buffer {
-    // Generates a standard sys_exit(0) sequence.
-    return Buffer.from([
-      0x48, 0xc7, 0xc0, 0x3c, 0x00, 0x00, 0x00, // mov rax, 60 (sys_exit)
-      0x48, 0xc7, 0xc7, 0x00, 0x00, 0x00, 0x00, // mov rdi, 0 (exit code)
-      0x0f, 0x05                                // syscall
-    ]);
-  }
-
   impl() {
-    // if fn_body  is empty
-    if (this.fn_body.length === 0) {
-      this.fn_body = this.gen_exit_syscall();
-    } else {
-      this.fn_body = Buffer.concat([
-        this.fn_body,
-        this.gen_exit_syscall()
-      ]);
-    }
-
     const buffer = Buffer.concat([
       this.gen_prologue(),
       this.gen_allocate_local_variables(),
       this.fn_body,
+      this.gen_exit_syscall(),
       this.gen_free_local_variables(),
       this.gen_epilogue()
     ]);

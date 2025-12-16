@@ -69,7 +69,7 @@ class BuilderExpression {
       const peek = (i) => ast[i];
 
       while (localIndex < ast.length) {
-        if (peek(localIndex).type == TypeOfAtomicExpression.CALL || peek(localIndex).type == TypeOfAtomicExpression.OBJECT) {
+        if ([TypeOfAtomicExpression.CALL, TypeOfAtomicExpression.OBJECT].map(cdt => peek(localIndex).type == cdt).some(Boolean)) {
           break;
         } else {
           attributes.push(peek(localIndex));
@@ -124,13 +124,18 @@ class BuilderExpression {
     return node;
   }
 
+  static zcc_build_call_instruction(ast) {
+    return ast[0];
+  }
+
   static zcc_build_fn_instruction(ast, attributes) {
     const node = {};
-
+    
     if (ast.length == 1) {
       node.attributes = attributes.slice(0, -1);
       node.name = attributes[attributes.length - 1];
       node.arguments = null;
+      node.returnTypeOfValue = null;
 
       if (ast[0].type == TypeOfAtomicExpression.OBJECT) {
         node.body = ast[0].body.body;
@@ -139,12 +144,17 @@ class BuilderExpression {
       node.attributes = attributes;
       node.name = ast[0].body.caller;
       node.arguments = ast[0].body.arguments;
+      node.returnTypeOfValue = null;
 
       if (ast[1].type == TypeOfAtomicExpression.OBJECT) {
         node.body = ast[1].body.body;
       }
+
+      if (ast.length == 3) {
+        node.returnTypeOfValue = ast.at(-1);
+      }
     }
-    
+
     return node;
   }
 

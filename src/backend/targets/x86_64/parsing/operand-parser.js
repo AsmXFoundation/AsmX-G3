@@ -1,17 +1,31 @@
+const JournalService = require("../../../../server/journal-service");
 const TypeOfAtomicExpression = require("../../../../types/expression.type");
 const TypeOfToken = require("../../../../types/token.type");
 // const { OperandSize, OperandType } = require("../header.js");
 
 class OperandParser {
-  static rdb;
+  static rfd; // Register file descriptor
+  static srfd; // Segment register file descriptor
 
-  static provide_rdb(rdb) {
-    this.rdb = rdb;
+  static provide_rfd(rfd) {
+    if (rfd == null) {
+      JournalService.journal.error('Register file is null');
+    }
+    this.rfd = rfd;
+  }
+
+  static provide_srfd(srfd) {
+    if (srfd == null) {
+      JournalService.journal.error('Segment register file is null');
+    }
+    this.srfd = srfd;
   }
 
   static parseOperand(operand) {
     if (this.is_register(operand)) {
      return this.parse_register(operand); 
+    } else if (this.is_segment_register(operand)) {
+      return this.parse_segment_register(operand);
     } else if (this.is_immediate(operand)) {
       return this.parse_immediate(operand);
     } else if (this.is_variable_address(operand)) {
@@ -23,7 +37,14 @@ class OperandParser {
   
   static is_register(operand) {
     if (operand.type == TypeOfToken.REGISTER) {
-      return Object.keys(this.rdb).includes(operand.lexem.slice(1));
+      return Object.keys(this.rfd).includes(operand.lexem.slice(1));
+    }
+    return false;
+  }
+
+  static is_segment_register(operand) {
+    if (operand.type == TypeOfToken.REGISTER) {
+      return Object.keys(this.srfd).includes(operand.lexem.slice(1));
     }
     return false;
   }
@@ -52,6 +73,10 @@ class OperandParser {
 
   static parse_register(register) {
     return { type: 'register', name: register.lexem.slice(1) };
+  }
+
+  static parse_segment_register(register) {
+    return { type: 'segment_register', name: register.lexem.slice(1) };
   }
 
   static parse_immediate(immediate) {

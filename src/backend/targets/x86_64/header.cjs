@@ -1,7 +1,7 @@
 "use strict";
 // --- Enums and Types ---
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.InstructionNameTags = exports.OperandEncoding = exports.OperandSize = exports.OperandType = void 0;
+exports.AssemblyInstructionDescriptorTableBase = exports.OperandEncoding = exports.OperandSize = exports.OperandType = void 0;
 // Represents the type of an operand
 var OperandType;
 (function (OperandType) {
@@ -31,3 +31,20 @@ var OperandEncoding;
     OperandEncoding[OperandEncoding["Implicit"] = 4] = "Implicit";
     // Add more as needed (e.g., VEX encoding)
 })(OperandEncoding || (exports.OperandEncoding = OperandEncoding = {}));
+class AssemblyInstructionDescriptorTableBase {
+    static defineInstructions() { }
+    ;
+    // instructions_without_operands_map
+    static mkinstr_without_operands(mnemonic, opcode) {
+        return { mnemonic, variants: [{ opcode, operands: [] }] };
+    }
+    static getInstructionSet() {
+        return this.instructionSet;
+    }
+    static getRegisterInformation() {
+        return this.registerInformation;
+    }
+}
+exports.AssemblyInstructionDescriptorTableBase = AssemblyInstructionDescriptorTableBase;
+AssemblyInstructionDescriptorTableBase.instructionSet = new Map();
+AssemblyInstructionDescriptorTableBase.registerInformation = {};

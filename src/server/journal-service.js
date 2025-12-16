@@ -95,7 +95,7 @@ class JournalService {
   }
 
   rawError(message, context = null) {
-    if (!this.shouldShow(JournalService.LOG_LEVELS.ERROR)) return;
+    if (!this.shouldShow()) return;
     const timestamp = new Date().toISOString();
     this.errors.push({ message, context, timestamp });
     console.error(message);
@@ -152,7 +152,84 @@ class JournalService {
   }
 }
 
-const journalService = new JournalService();
+class VerboseJournalService {
+  static instance = null;
 
-module.exports = JournalService;
-module.exports.journal = journalService; 
+  constructor() {
+    this.isQuiet = false;
+    this.verbose_lvl = 0;
+    this.traceback_lvl = 0;
+    this.mark = "";
+  }
+
+  setQuiet(quiet = true) {
+    this.isQuiet = quiet;
+  }
+
+  setVerbose(verbose_level) {
+    this.verbose_lvl = verbose_level;
+  }
+
+  setTraceback(traceback_level) {
+    this.traceback_lvl = traceback_level;
+  }
+  
+  shouldShow() {
+    if (this.isQuiet) return false;
+    return true;
+  }
+
+  success(verbose_level, message) {
+    if (verbose_level <= this.verbose_lvl && this.shouldShow()) {
+      console.log(`[32m${this.mark}:\x1b[0m ${message}\x1b[0m`);
+    }
+  }
+
+  info(verbose_level, message) {
+    if (verbose_level <= this.verbose_lvl && this.shouldShow()) {
+      console.log(`[36m${this.mark}:\x1b[0m ${message}\x1b[0m`);
+    }
+  }
+
+  warn(verbose_level, message) {
+    if (verbose_level <= this.verbose_lvl && this.shouldShow()) {
+      console.log(`[33m${this.mark}:\x1b[0m ${message}\x1b[0m`);
+    }
+  }
+
+  error(verbose_level, message) {
+    if (verbose_level <= this.verbose_lvl && this.shouldShow()) {
+      console.log(`[31m${this.mark}:\x1b[0m ${message}\x1b[0m`);
+    }
+  }
+
+  traceback(traceback_lvl, message) {
+    if (traceback_lvl <= this.traceback_lvl && this.shouldShow()) {
+      console.log(`${Color.FG_BLINK_BRIGHT_ORANGE}${this.mark}: ${message}\x1b[0m`);
+    }
+  }
+}
+
+class HardwareCompilerJournalService extends VerboseJournalService {
+  static instance = null;
+  constructor() {
+    super();
+    this.mark = "hwc driver";
+  }
+}
+
+class DriverJournalService extends VerboseJournalService {
+  static instance = null;
+  constructor() {
+    super();
+    this.mark = "base driver";
+  }
+}
+
+const journalService = new JournalService();
+const hwcJournalService = new HardwareCompilerJournalService();
+const driverJournalService = new DriverJournalService();
+
+module.exports.journal = journalService;
+module.exports.hwcJournal = hwcJournalService;
+module.exports.driverJournal = driverJournalService;

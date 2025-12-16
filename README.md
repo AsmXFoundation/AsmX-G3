@@ -2,6 +2,10 @@
 
 [ChangeLog](./changelog)
 
+## Requires
+
+ - `6.17.9-arch1-1` (Arch Linux)
+
 ## Command Line Interface (CLI) Usage
 
 ### Installation
@@ -34,11 +38,49 @@ asmx [file] [options]
 
 ### Example
 
-```
+```sh
 asmx main.asmx
 asmx main
 asmx main --release --target amd64 -o index
 asmx main --release --target amd64 -o myapp --package --package-type deb --package-name my-application --package-version 1.0.0
+
+asmx \
+  --multiboot \
+  --emergency-panic --verbose-common 10 \
+  --release --target amd64 \
+  --features all \
+  --source ./examples/compile -o compiled \
+  --source ./examples/simple_driver -o fireware.ko \
+  --source ./examples/libm -o libasmm.so
+
+asmx --multiclean
+```
+
+### create the KERNEL MODULE
+
+```sh
+asmx ./examples/simple_driver \
+  --release --target amd64 \
+  -o fireware.ko \
+  --features all \
+  --emergency-panic --verbose-common 10
+
+sudo insmod fireware.ko
+sudo rmmod fireware.ko
+sudo dmesg | tail -n 15
+```
+
+### create the own library (SHARED OBJECT)
+```sh
+asmx ./examples/libm \
+  --release --target amd64 \
+  -o libasmm.so \
+  --features all \
+  --emergency-panic --verbose-common 10
+
+sudo gcc -o ./examples/test_main ./examples/libm_test.c -L. -lasmm
+
+LD_LIBRARY_PATH=. ./examples/test_main
 ```
 
 ### Options
@@ -60,11 +102,13 @@ asmx main --release --target amd64 -o myapp --package --package-type deb --packa
 
 ### Compilation Options
 
-| Option / Flag           | Description                                                        |
-|-------------------------|--------------------------------------------------------------------|
-| `-r`, `--release`       | Create an executable file                                          |
-| `-o`, `--objname`       | Set the output file name                                           |
-| `-t`, `--target`        | Specify the target CPU architecture (amd64, etc) for compilation   |
+| Option / Flag           | Description                                                             |
+|-------------------------|-------------------------------------------------------------------------|
+| `-r`, `--release`       | Create an executable file                                               |
+| `-o`, `--objname`       | Set the output file name                                                |
+| `-t`, `--target`        | Specify the target CPU architecture (amd64, etc) for compilation        |
+| `-m`, `--march`         | Specify the target CPU microarchitecture (x86_64, etc) for compilation  |
+| `--features`            | Specify CPU features for compilation                                    |
 
 ### Package Options
 

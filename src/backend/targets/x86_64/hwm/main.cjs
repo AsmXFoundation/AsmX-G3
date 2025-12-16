@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.RegisterDB = exports.ConstRegisterDB = exports.HardwareMachineFactoryExceptionJournal = exports.HardwareMachineFactoryParserOpernadType = exports.HardwareMachineFactory = void 0;
+exports.SegmentRegisterFile = exports.ConstSegmentRegisterFile = exports.RegisterFile = exports.ConstRegisterFile = exports.HardwareMachineFactoryExceptionJournal = exports.HardwareMachineFactoryParserOpernadType = exports.HardwareMachineFactory = void 0;
 const header_cjs_1 = require("../header.cjs");
 // --- Register Information --- (Helper data)
-const ConstRegisterDB = {
+const ConstRegisterFile = {
     // 64-bit
     'rax': { code: 0, size: header_cjs_1.OperandSize.Qword },
     'rcx': { code: 1, size: header_cjs_1.OperandSize.Qword },
@@ -30,14 +30,14 @@ const ConstRegisterDB = {
     'ebp': { code: 5, size: header_cjs_1.OperandSize.Dword },
     'esi': { code: 6, size: header_cjs_1.OperandSize.Dword },
     'edi': { code: 7, size: header_cjs_1.OperandSize.Dword },
-    'r8d': { code: 0, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r9d': { code: 1, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r10d': { code: 2, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r11d': { code: 3, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r12d': { code: 4, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r13d': { code: 5, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r14d': { code: 6, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
-    'r15d': { code: 7, size: header_cjs_1.OperandSize.Dword, requiresRex: true },
+    'r8d': { code: 0, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r9d': { code: 1, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r10d': { code: 2, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r11d': { code: 3, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r12d': { code: 4, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r13d': { code: 5, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r14d': { code: 6, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
+    'r15d': { code: 7, size: header_cjs_1.OperandSize.Dword, requiresRex: true, isExtended: true },
     // 16-bit
     'ax': { code: 0, size: header_cjs_1.OperandSize.Word },
     'cx': { code: 1, size: header_cjs_1.OperandSize.Word },
@@ -47,38 +47,47 @@ const ConstRegisterDB = {
     'bp': { code: 5, size: header_cjs_1.OperandSize.Word },
     'si': { code: 6, size: header_cjs_1.OperandSize.Word },
     'di': { code: 7, size: header_cjs_1.OperandSize.Word },
-    'r8w': { code: 0, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r9w': { code: 1, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r10w': { code: 2, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r11w': { code: 3, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r12w': { code: 4, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r13w': { code: 5, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r14w': { code: 6, size: header_cjs_1.OperandSize.Word, requiresRex: true },
-    'r15w': { code: 7, size: header_cjs_1.OperandSize.Word, requiresRex: true },
+    'r8w': { code: 0, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r9w': { code: 1, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r10w': { code: 2, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r11w': { code: 3, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r12w': { code: 4, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r13w': { code: 5, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r14w': { code: 6, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
+    'r15w': { code: 7, size: header_cjs_1.OperandSize.Word, requiresRex: true, isExtended: true },
     // 8-bit Low
     'al': { code: 0, size: header_cjs_1.OperandSize.Byte },
     'cl': { code: 1, size: header_cjs_1.OperandSize.Byte },
     'dl': { code: 2, size: header_cjs_1.OperandSize.Byte },
     'bl': { code: 3, size: header_cjs_1.OperandSize.Byte },
-    'spl': { code: 4, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'bpl': { code: 5, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'sil': { code: 6, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'dil': { code: 7, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r8b': { code: 0, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r9b': { code: 1, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r10b': { code: 2, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r11b': { code: 3, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r12b': { code: 4, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r13b': { code: 5, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r14b': { code: 6, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
-    'r15b': { code: 7, size: header_cjs_1.OperandSize.Byte, requiresRex: true },
+    'spl': { code: 4, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: false },
+    'bpl': { code: 5, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: false },
+    'sil': { code: 6, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: false },
+    'dil': { code: 7, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: false },
+    'r8b': { code: 0, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r9b': { code: 1, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r10b': { code: 2, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r11b': { code: 3, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r12b': { code: 4, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r13b': { code: 5, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r14b': { code: 6, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
+    'r15b': { code: 7, size: header_cjs_1.OperandSize.Byte, requiresRex: true, isExtended: true },
     // 8-bit High (require REX prefix if used with SIL/DIL/SPL/BPL etc.)
-    'ah': { code: 4, size: header_cjs_1.OperandSize.Byte, highByte: true },
-    'ch': { code: 5, size: header_cjs_1.OperandSize.Byte, highByte: true },
-    'dh': { code: 6, size: header_cjs_1.OperandSize.Byte, highByte: true },
-    'bh': { code: 7, size: header_cjs_1.OperandSize.Byte, highByte: true },
+    'ah': { code: 4, size: header_cjs_1.OperandSize.Byte, highByte: true, isExtended: false },
+    'ch': { code: 5, size: header_cjs_1.OperandSize.Byte, highByte: true, isExtended: false },
+    'dh': { code: 6, size: header_cjs_1.OperandSize.Byte, highByte: true, isExtended: false },
+    'bh': { code: 7, size: header_cjs_1.OperandSize.Byte, highByte: true, isExtended: false },
 };
-exports.ConstRegisterDB = ConstRegisterDB;
+exports.ConstRegisterFile = ConstRegisterFile;
+const ConstSegmentRegisterFile = {
+    'es': { code: 0x26, size: header_cjs_1.OperandSize.Word },
+    'cs': { code: 0x2E, size: header_cjs_1.OperandSize.Word },
+    'ss': { code: 0x36, size: header_cjs_1.OperandSize.Word },
+    'ds': { code: 0x3E, size: header_cjs_1.OperandSize.Word },
+    'fs': { code: 0x64, size: header_cjs_1.OperandSize.Word },
+    'gs': { code: 0x65, size: header_cjs_1.OperandSize.Word },
+};
+exports.ConstSegmentRegisterFile = ConstSegmentRegisterFile;
 class IntegerTypes {
     static isSigned8Bit(n) {
         return n >= -128 && n <= 127;
@@ -99,16 +108,24 @@ class IntegerTypes {
         return n >= 0 && n <= 4294967295;
     }
 }
-class RegisterDB {
+class RegisterFile {
     static get(_name) {
-        return this.ConstRegisterDB[_name.toLowerCase()] || null;
+        return this.ConstRegisterFile[_name.toLowerCase()] || null;
     }
 }
-exports.RegisterDB = RegisterDB;
-RegisterDB.ConstRegisterDB = ConstRegisterDB;
+exports.RegisterFile = RegisterFile;
+RegisterFile.ConstRegisterFile = ConstRegisterFile;
+class SegmentRegisterFile {
+    static get(_name) {
+        return this.ConstSegmentRegisterFile[_name.toLowerCase()] || null;
+    }
+}
+exports.SegmentRegisterFile = SegmentRegisterFile;
+SegmentRegisterFile.ConstSegmentRegisterFile = ConstSegmentRegisterFile;
 class HardwareMachineFactoryBase {
 }
-HardwareMachineFactoryBase.RegisterDB = RegisterDB;
+HardwareMachineFactoryBase.RegisterFile = RegisterFile;
+HardwareMachineFactoryBase.SegmentRegisterFile = SegmentRegisterFile;
 HardwareMachineFactoryBase.IntegerTypes = IntegerTypes;
 class HardwareMachineFactoryExceptionJournal extends HardwareMachineFactoryBase {
     static throw(message) {
@@ -119,10 +136,16 @@ exports.HardwareMachineFactoryExceptionJournal = HardwareMachineFactoryException
 HardwareMachineFactoryExceptionJournal.journal = [];
 class HardwareMachineFactoryParserOpernadType extends HardwareMachineFactoryBase {
     static parseReg(name) {
-        const register_info = RegisterDB.get(name);
+        const register_info = RegisterFile.get(name);
         if (!register_info)
             return null;
         return { type: header_cjs_1.OperandType.Reg, size: register_info.size, value: name.toLowerCase() };
+    }
+    static parseSreg(regName) {
+        const register_info = SegmentRegisterFile.get(regName);
+        if (!register_info)
+            return null;
+        return { type: header_cjs_1.OperandType.Sreg, size: register_info.size, value: regName.toLowerCase() };
     }
     static parseImm(value, size) {
         let actualSize = size;
@@ -147,7 +170,7 @@ class HardwareMachineFactoryParserOpernadType extends HardwareMachineFactoryBase
                 actualSize = header_cjs_1.OperandSize.Dword;
             }
         }
-        return { type: header_cjs_1.OperandType.Imm, size: actualSize, value };
+        return { type: header_cjs_1.OperandType.Imm, size: actualSize, value: Number(value) };
     }
     static parseMem(definition) {
         return { type: header_cjs_1.OperandType.Mem, size: definition.size, value: definition };
@@ -184,7 +207,7 @@ class HardwareMachineFactoryEncoder {
         else if (RegisterOperandPlacementReport &&
             FirstOperandOfRegisterEncountered &&
             FirstOperandOfRegisterEncountered.type === header_cjs_1.OperandType.Reg) {
-            const regInfo = RegisterDB.get(FirstOperandOfRegisterEncountered.value);
+            const regInfo = RegisterFile.get(FirstOperandOfRegisterEncountered.value);
             if (!regInfo) {
                 HardwareMachineFactoryExceptionJournal.throw(`Unknown register for ModRM.reg: ${FirstOperandOfRegisterEncountered.value}`);
             }
@@ -204,7 +227,7 @@ class HardwareMachineFactoryEncoder {
         if (FirstOperandOfRmEncountered?.type === header_cjs_1.OperandType.Reg) {
             // Direct register addressing
             modrm.mod = 3;
-            const rmRegisterReport = RegisterDB.get(FirstOperandOfRmEncountered.value);
+            const rmRegisterReport = RegisterFile.get(FirstOperandOfRmEncountered.value);
             if (!rmRegisterReport) {
                 HardwareMachineFactoryExceptionJournal.throw(`Unknown register for ModRM.rm: ${FirstOperandOfRmEncountered.value}`);
             }
@@ -220,8 +243,8 @@ class HardwareMachineFactoryEncoder {
              * 2. Base is ESP/RSP/R12 (encoded as 100b in ModR/M r/m).
              * 3. Mod = 0 and Base is EBP/RBP/R5 (encoded as 101b in ModR/M r/m - indicates disp32 without SIB)
              */
-            const index_register_value = memory_address.index ? RegisterDB.get(memory_address.index) : null;
-            const base_register_value = memory_address.base ? RegisterDB.get(memory_address.base) : null;
+            const index_register_value = memory_address.index ? RegisterFile.get(memory_address.index) : null;
+            const base_register_value = memory_address.base ? RegisterFile.get(memory_address.base) : null;
             /**
              * RSP/R12 always require SIB
              * Check if base is ESP/RSP or R12/R12D etc.
@@ -352,7 +375,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                     const implicitOperandTmpl = variant.operands.find(operand => operand.isImplicit);
                     // Fixed implicit reg (e.g., 'al')
                     if (implicitOperandTmpl?.implicitReg) {
-                        const RegisterReport = RegisterDB.get(implicitOperandTmpl.implicitReg);
+                        const RegisterReport = RegisterFile.get(implicitOperandTmpl.implicitReg);
                         if (RegisterReport)
                             return RegisterReport.size;
                     }
@@ -420,7 +443,7 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
             const operandReport = variant.operands[i];
             if (operand.type === header_cjs_1.OperandType.Reg) {
                 const register = operand.value;
-                const registerReport = RegisterDB.get(register);
+                const registerReport = RegisterFile.get(register);
                 if (!registerReport) {
                     HardwareMachineFactoryExceptionJournal.throw(`Unknown register: ${register}`);
                 }
@@ -438,30 +461,39 @@ class HardwareMachineFactoryComputation extends HardwareMachineFactoryBase {
                 // Check for extended registers (R8-R15 or their parts)
                 if (registerReport?.requiresRex) {
                     rex.needed = true;
-                    if (operandReport.encoding === header_cjs_1.OperandEncoding.ModRM_Reg) {
-                        rex.R = true;
-                    }
-                    if (operandReport.encoding === header_cjs_1.OperandEncoding.ModRM_RM) {
-                        rex.B = true;
-                    }
-                    if (operandReport.encoding === header_cjs_1.OperandEncoding.OpcodeReg) {
-                        rex.B = true; // e.g., PUSH r8
+                    // only set extension bits if extended
+                    if (registerReport?.isExtended) {
+                        if (operandReport.encoding === header_cjs_1.OperandEncoding.ModRM_Reg) {
+                            rex.R = true;
+                        }
+                        if (operandReport.encoding === header_cjs_1.OperandEncoding.ModRM_RM) {
+                            rex.B = true;
+                        }
+                        if (operandReport.encoding === header_cjs_1.OperandEncoding.OpcodeReg) {
+                            rex.B = true; // e.g., PUSH r8
+                        }
                     }
                 }
             }
             else if (operand.type === header_cjs_1.OperandType.Mem) {
                 const MemoryOperand = operand.value;
                 if (MemoryOperand.base) {
-                    const registerReport = RegisterDB.get(MemoryOperand.base);
+                    const registerReport = RegisterFile.get(MemoryOperand.base);
                     if (registerReport?.requiresRex) {
                         rex.needed = true;
+                        // rex.B = true;
+                    }
+                    if (registerReport?.isExtended) { // NEW
                         rex.B = true;
                     }
                 }
                 if (MemoryOperand.index) {
-                    const registerReport = RegisterDB.get(MemoryOperand.index);
+                    const registerReport = RegisterFile.get(MemoryOperand.index);
                     if (registerReport?.requiresRex) {
                         rex.needed = true;
+                        // rex.X = true;
+                    }
+                    if (registerReport?.isExtended) { // NEW
                         rex.X = true;
                     }
                 }
@@ -514,7 +546,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         this.source = Buffer.alloc(0);
     }
     match_any_group_registers_and_get_expected_register(registers, determinedOpSize) {
-        const matches = registers.filter((register) => RegisterDB.get(register)?.size === determinedOpSize);
+        const matches = registers.filter((register) => RegisterFile.get(register)?.size === determinedOpSize);
         if (matches.length === 1) {
             return matches[0];
         }
@@ -532,8 +564,10 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         const candidates = [];
         for (const variant of definition.variants) {
             if (variant.operands.length !== operands.length) {
+                // console.log(`Length mismatch for opcode ${variant.opcode}: expected ${variant.operands.length}, got ${operands.length}`);
                 continue;
             }
+            // console.log(`Checking variant with opcode: ${variant.opcode}`);
             let match = true;
             let determinedOperandSize = null; // Tentative operation size
             /**
@@ -559,7 +593,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                     {
                         const implicitTmpl = variant.operands.find(operand => operand.isImplicit);
                         if (implicitTmpl?.implicitReg) {
-                            determinedOperandSize = RegisterDB.get(implicitTmpl.implicitReg)?.size || null;
+                            determinedOperandSize = RegisterFile.get(implicitTmpl.implicitReg)?.size || null;
                         }
                         // If family or no specific reg, try inferring from first op later
                         break;
@@ -590,43 +624,57 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                 // 1. Check Type
                 const allowedTypes = Array.isArray(tmpl.type) ? tmpl.type : [tmpl.type];
                 if (!allowedTypes.includes(operand.type)) {
+                    // console.log(`Type mismatch for opcode ${variant.opcode}: expected ${allowedTypes}, got ${operand.type}`);
                     match = false;
                     break;
                 }
                 // 2. Check Size against Template and Determined OpSize
+                // if (tmpl.isImplicit) {
+                //   // Validate implicit operand provided by user matches template/opSize
+                //   let expectedReg: string | string[] = '';
+                //   let expectedSize: OperandSize | null = determinedOperandSize; // Start with determined size
+                //   if (tmpl.implicitReg) {
+                //     expectedReg = tmpl.implicitReg;
+                //     expectedSize = RegisterFile.get(expectedReg)?.size || null;
+                //   } else if (variant.implicitRegFamily != undefined) {
+                //     const match = [
+                //       this.match_rax_group_registers_and_get_expected_register(determinedOperandSize),
+                //     ];
+                //     expectedReg = match.filter(x => x != undefined)[0] || '' as string | string[];
+                //     expectedSize = determinedOperandSize;
+                //   }
+                //   // Add other implicit families if needed...
+                //   // if (!expectedSize && expectedSize !== operand.size || (expectedReg && (operand.value as string).toLowerCase() !== expectedReg)) {
+                //   //   match = false;
+                //   //   break;
+                //   // }
+                //   if (!expectedSize && expectedSize !== operand.size || (expectedReg && (expectedReg instanceof Array ? !expectedReg.includes((operand.value as string).toLowerCase()) : (operand.value as string).toLowerCase() !== expectedReg))) {
+                //     match = false;
+                //     break;
+                //   }
+                //   // Also ensure determinedOpSize is consistent with the implicit register's size
+                //   if (determinedOperandSize !== expectedSize) {
+                //     /**
+                //      * This might happen if initial determination was wrong. Re-evaluate?
+                //      * Example: ADD rax, imm32. determinedOpSize starts as Qword. Implicit expects RAX (Qword). Match.
+                //      * Example: ADD al, imm8. determinedOpSize starts as Byte. Implicit expects AL (Byte). Match.
+                //      */
+                //     match = false; 
+                //     break; // If determined size conflicts with specific implicit reg, it's not this variant.
+                //   }
+                // }
                 if (tmpl.isImplicit) {
-                    // Validate implicit operand provided by user matches template/opSize
-                    let expectedReg = '';
-                    let expectedSize = determinedOperandSize; // Start with determined size
-                    if (tmpl.implicitReg) {
-                        expectedReg = tmpl.implicitReg;
-                        expectedSize = RegisterDB.get(expectedReg)?.size || null;
-                    }
-                    else if (variant.implicitRegFamily != undefined) {
-                        const match = [
-                            this.match_rax_group_registers_and_get_expected_register(determinedOperandSize),
-                        ];
-                        expectedReg = match.filter(x => x != undefined)[0] || '';
-                        expectedSize = determinedOperandSize;
-                    }
-                    // Add other implicit families if needed...
-                    // if (!expectedSize && expectedSize !== operand.size || (expectedReg && (operand.value as string).toLowerCase() !== expectedReg)) {
-                    //   match = false;
-                    //   break;
-                    // }
-                    if (!expectedSize && expectedSize !== operand.size || (expectedReg && (expectedReg instanceof Array ? !expectedReg.includes(operand.value.toLowerCase()) : operand.value.toLowerCase() !== expectedReg))) {
+                    // Validate implicit operand matches the expected register exactly
+                    if (tmpl.implicitReg && operand.value && operand.value.toLowerCase() !== tmpl.implicitReg) {
+                        // console.log(`Implicit register mismatch for opcode ${variant.opcode}: expected ${tmpl.implicitReg}, got ${operand.value}`);
                         match = false;
                         break;
                     }
-                    // Also ensure determinedOpSize is consistent with the implicit register's size
-                    if (determinedOperandSize !== expectedSize) {
-                        /**
-                         * This might happen if initial determination was wrong. Re-evaluate?
-                         * Example: ADD rax, imm32. determinedOpSize starts as Qword. Implicit expects RAX (Qword). Match.
-                         * Example: ADD al, imm8. determinedOpSize starts as Byte. Implicit expects AL (Byte). Match.
-                         */
+                    // Validate size if specified
+                    if (tmpl.size && operand.size !== tmpl.size) {
+                        // console.log(`Implicit size mismatch for opcode ${variant.opcode}: expected ${tmpl.size}, got ${operand.size}`);
                         match = false;
-                        break; // If determined size conflicts with specific implicit reg, it's not this variant.
+                        break;
                     }
                 }
                 else if (operand.type === header_cjs_1.OperandType.Imm) {
@@ -667,6 +715,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                     if (tmpl.size) {
                         const allowedSizes = Array.isArray(tmpl.size) ? tmpl.size : [tmpl.size];
                         if (!allowedSizes.includes(operand.size)) {
+                            // console.log(`Size mismatch for opcode ${variant.opcode}: expected ${allowedSizes}, got ${operand.size}`);
                             match = false;
                             break;
                         }
@@ -681,6 +730,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                         if ((variant.operationSizeMode === 'ExplicitByte' || variant.operationSizeMode === 'ExplicitWord' ||
                             variant.operationSizeMode === 'ExplicitDword' || variant.operationSizeMode === 'ExplicitQword')
                             && operand.size !== determinedOperandSize) {
+                            // console.log(`Determined size for opcode ${variant.opcode}: ${determinedOperandSize}`);
                             match = false;
                             break;
                         }
@@ -701,6 +751,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
                             firstRegMemSize = operands[i].size;
                         }
                         else if (operands[i].size !== firstRegMemSize) {
+                            // console.log(`Explicit mode size mismatch for opcode ${variant.opcode}: operand size ${operands[i].size} != determined ${determinedOperandSize}`);
                             sizesConsistent = false;
                             break;
                         }
@@ -740,7 +791,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         }
         // Priority 3: Prefer variant matching a specific implicit register if provided
         const implicitOperand = operands.find((operand, i) => candidates[0].operands[i].isImplicit);
-        if (implicitOperand && implicitOperand.type === header_cjs_1.OperandType.Reg) {
+        if (implicitOperand && (implicitOperand.type === header_cjs_1.OperandType.Reg || implicitOperand.type === header_cjs_1.OperandType.Sreg)) {
             const specificImplicitMatch = candidates.find(variant => {
                 const tmpl = variant.operands.find(operand => operand.isImplicit);
                 return tmpl?.implicitReg === implicitOperand.value.toLowerCase();
@@ -758,11 +809,13 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         const definition = this.instructionSet.get(mnemonic.toLowerCase());
         if (!definition) {
             HardwareMachineFactoryExceptionJournal.throw(`Unknown instruction mnemonic: ${mnemonic}`);
+            // console.log(`Unknown instruction mnemonic: ${mnemonic}`);
         }
         // Find the matching variant based on operands
         const variant = this.findMatchingVariant(definition, operands);
         if (!variant) {
             HardwareMachineFactoryExceptionJournal.throw(`No matching instruction variant found for mnemonic: ${mnemonic}`);
+            // throw new Error(`No matching variant for ${mnemonic} with operands: ${JSON.stringify(operands)}`);
         }
         const buffers = [];
         // --- Determine Prefixes (Operand Size, REX) ---
@@ -772,8 +825,8 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         const memOp = operands.find(op => op.type === header_cjs_1.OperandType.Mem);
         if (memOp) {
             const memOperand = memOp.value;
-            const baseReg = memOperand.base ? RegisterDB.get(memOperand.base) : null;
-            const indexReg = memOperand.index ? RegisterDB.get(memOperand.index) : null;
+            const baseReg = memOperand.base ? RegisterFile.get(memOperand.base) : null;
+            const indexReg = memOperand.index ? RegisterFile.get(memOperand.index) : null;
             if ((baseReg && baseReg.size === header_cjs_1.OperandSize.Dword) || (indexReg && indexReg.size === header_cjs_1.OperandSize.Dword)) {
                 addressSizePrefix = 0x67;
             }
@@ -806,12 +859,19 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         const opcodeRegOperandIndex = variant?.operands.findIndex(op => op.encoding === header_cjs_1.OperandEncoding.OpcodeReg);
         if (opcodeRegOperandIndex !== -1) {
             const regOperand = operands[opcodeRegOperandIndex];
-            const regInfo = RegisterDB.get(regOperand.value);
+            const regInfo = RegisterFile.get(regOperand.value);
             if (regInfo) {
                 finalOpcode += regInfo.code;
             }
         }
-        buffers.push(Buffer.from([finalOpcode]));
+        // buffers.push(Buffer.from([finalOpcode]));
+        // Emit all opcode bytes (fix for multi-byte opcodes like 0F A0)
+        if (variant.opcode.length > 1) {
+            buffers.push(Buffer.from(variant.opcode));
+        }
+        else {
+            buffers.push(Buffer.from([finalOpcode]));
+        }
         // buffers.push(Buffer.from(variant.opcode));
         // --- Encode ModR/M, SIB, Displacement ---
         let immediateValue = null;

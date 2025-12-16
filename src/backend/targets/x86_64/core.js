@@ -9,16 +9,20 @@ const Router = require('../../../execution/router.js');
 
 const CompilerDriver = require('./driver.js');
 
-function fs_check_elf_file_extension(_fd) {
+function fs_check_available_file_output_extension(_fd) {
   l$0: if (_fd) {
-    const allow_extensions = ["elf"];
+    const default_names = ["elf", "elf64"];
+    const allow_extensions = [...default_names, "ko", "so"];
     if (_fd.split('.').length == 1) {
       break l$0;
     }
     const extension = _fd.split('.').at(-1);
     if (!allow_extensions.includes(extension)) {
-      Server.journal.error(`Extension ${extension} is not allowed`);
-      return;
+      Server.journal.error(`Extension "${extension}" is not allowed`);
+      process.exit();
+    }
+    if (default_names.includes(extension)) {
+      _fd = _fd.slice(0, _fd.lastIndexOf("."));
     }
   }
 }
@@ -28,9 +32,9 @@ class Core {
     let originalSrc = src;
     src = path.join(process.cwd(), originalSrc);
 
-    if (parameters?.hwm_units) {
-      require('./hwm/units.cjs');
-    }
+    // if (parameters?.hwm_units) {
+    //   require('./hwm/units.cjs');
+    // }
 
     Server.init();
     Server.journal.success(`Building core`, 'zgen');
@@ -59,8 +63,8 @@ class Core {
       Server.journal.success(`Core built`, 'zgen');
       Server.journal.process("Compiling assembly ...", 'zgen');
 
-      fs_check_elf_file_extension(parameters?.objname);
-      new CompilerDriver(ast, parameters.objname);
+      fs_check_available_file_output_extension(parameters?.objname);
+      new CompilerDriver(ast, parameters.objname, parameters);
       
       Server.journal.success(`Assembly compiled`, 'zgen');
       Server.journal.success(`Core executed`, 'zgen');

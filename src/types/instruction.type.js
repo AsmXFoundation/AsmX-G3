@@ -81,7 +81,6 @@ class TypeOfInstructionExpression {
     return CustomSwitch.switch(this.ZCC_GENERIC_INSTRUCTION, {
       [this.has(instruction.lexem, 'section')]:                                       this.SECTION,
       [this.has(instruction.lexem, 'include')]:                                       this.MODULE,
-      [this.has(instruction.lexem, 'call', 'syscall')]:                               this.SYSTEM,
       [this.has(instruction.lexem, 'tion', 'fn')]:                                    this.DECLARATION,
     });
   }

@@ -296,7 +296,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
     const section_token = ast_node.body.inizializer.body.identifer;
     const section_t = section_token.lexem;
 
-    if (section_t == 'data' || section_t == 'rodata') {
+    if (["data", "rodata", "bss", "modinfo"].includes(section_t)) {
       this.zcc_scan_data_section(token, ast_node.body.values);
     } else {
       this.exceptDefaultTracewayException(token, `Unknown section: ${section_t}`);
@@ -348,10 +348,24 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
     }
   }
 
+  static zcc_scan_call_instruction(token, ast) {
+    this.checkEmptyInstruction(token, ast);
+
+    if (ast.length > 1) {
+      this.exceptDefaultTracewayException(token, 'call instruction must have one expression');
+    }
+
+    const ast_node = ast[0];
+    if (![TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.CALL, TypeOfAtomicExpression.PARENTHESIS, TypeOfAtomicExpression.MEMBER].includes(ast_node.type)) {
+      this.exceptDefaultTracewayException(token, 'call instruction must have syntax; @call name( ... )?');
+    }
+  }
+
   static zcc_scan_fn_instruction(token, ast, possibleTerms) {
     this.checkEmptyInstruction(token, ast);
 
-    if (ast.length > 2) {
+    // { name(args?), body, return? }
+    if (ast.length > 3) {
       this.exceptDefaultTracewayException(token, 'There can be only one body');
     }
     
