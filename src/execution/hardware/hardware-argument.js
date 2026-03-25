@@ -48,7 +48,7 @@ class HardwareArgument {
       let maximum_quantity_of_bytes_of_value = hardware.sizeof(value);
 
       if (full_token?.type == TypeOfAtomicExpression.MEMBER) {
-        maximum_quantity_of_bytes_of_value = hardware.sizeof_by_name_t(full_token.body.point.body.identifer.lexem);
+        maximum_quantity_of_bytes_of_value = hardware.sizeof_by_name_t(full_token.body.point.body.identifier.lexem);
       }
 
       return { type, value, qobv: quantity_of_bytes_of_value, max_qobv: maximum_quantity_of_bytes_of_value };
@@ -68,7 +68,7 @@ class HardwareArgument {
 
       RuntimeException.exceptDefaultTracewayException(token.body.parentheses[0], 'Unsupported memory argument');
     } else if (type == hardware.types_movement.tar) {
-      if (token.body.point.type != TypeOfAtomicExpression.IDENTIFER) {
+      if (token.body.point.type != TypeOfAtomicExpression.IDENTIFIER) {
         RuntimeException.exceptDefaultTracewayException(token.body.parentheses[0], 'Unsupported target argument');
       }
 
@@ -80,7 +80,7 @@ class HardwareArgument {
         RuntimeException.exceptDefaultTracewayException(token.body.parentheses[0], 'Unsupported target argument');
       }
 
-      const defined_typeid = token.body.point.body.identifer.lexem;
+      const defined_typeid = token.body.point.body.identifier.lexem;
       const pointer_of_value = this.fetch_raw(token.body.link, this.fetch_typeid(token.body.link));
       const quantity_of_bytes_of_value = hardware.sizeof(pointer_of_value.value);
 
@@ -91,7 +91,7 @@ class HardwareArgument {
       return {
         type: hardware.types_movement.tar,
         ptr: this.fetch_raw(token.body.link, this.fetch_typeid(token.body.link), token),
-        tar: token.body.point.body.identifer.lexem
+        tar: token.body.point.body.identifier.lexem
       };
     }
   }

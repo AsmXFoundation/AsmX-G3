@@ -114,8 +114,8 @@ class CompilerDriver {
     return token.lexem;
   }
 
-  identifer_unwrap(expression) {
-    return expression.body.identifer;
+  identifier_unwrap(expression) {
+    return expression.body.identifier;
   }
 
   compile_generic_instruction(expr_unwrap, expression) {
@@ -355,7 +355,7 @@ class CompilerDriver {
 
     // Get the function name from the operand
     // We assume the parser will simply return the identifier token
-    const functionNameToken = expr_unwrap.operands.body.identifer;
+    const functionNameToken = expr_unwrap.operands.body.identifier;
     if (!functionNameToken) {
       new exceptions.ExpressionException(`Invalid operand for 'call'`, expression.body.id, this.zcc_compiler_warning);
       return { buffer: Buffer.alloc(0), relocs: [] };
@@ -395,8 +395,8 @@ class CompilerDriver {
 
   compile_module(expr_unwrap, expression) {
     if (expr_unwrap.alias == null) {
-      if (expr_unwrap.path.hasOwnProperty('identifer')) {
-        if (this.token_unwrap(expr_unwrap.path.identifer) != "libc") {
+      if (expr_unwrap.path.hasOwnProperty('identifier')) {
+        if (this.token_unwrap(expr_unwrap.path.identifier) != "libc") {
           new exceptions.WarningExpressionException(
             `Currently, only libc includes are supported.`,
             expression.body.id,
@@ -418,12 +418,12 @@ class CompilerDriver {
 
   kexec_create_var(section_t, expression) {
     let name = expression.property;
-    name = this.identifer_unwrap(name);
+    name = this.identifier_unwrap(name);
     let name_token = Object.assign({}, name);
     name = this.token_unwrap(name);
 
     let rhs = expression.value.body;
-    let type = this.token_unwrap(this.identifer_unwrap(rhs.caller));
+    let type = this.token_unwrap(this.identifier_unwrap(rhs.caller));
 
     if (!ZccTypes.is_type(type)) {
       new exceptions.ExpressionException(`Unknown type for variable: ${type}`, name_token, this.zcc_compiler_warning);
@@ -451,12 +451,12 @@ class CompilerDriver {
 
   kexec_constexpr_modinfo_section_iter(section_t, expression) {
     let name = expression.property;
-    name = this.identifer_unwrap(name);
+    name = this.identifier_unwrap(name);
     let name_token = Object.assign({}, name);
     name = this.token_unwrap(name);
 
     let rhs = expression.value.body;
-    let type = this.token_unwrap(this.identifer_unwrap(rhs.caller));
+    let type = this.token_unwrap(this.identifier_unwrap(rhs.caller));
 
     if (!ZccTypes.is_str(type)) {
       new exceptions.ExpressionException(`.modinfo section supports only strings. Current type: ${type}`, name_token, this.zcc_compiler_warning);
@@ -532,6 +532,10 @@ class CompilerDriver {
     }
   }
 
+  __asmx_get_cache_dir() {
+    return path.join(process.cwd(), '.cache', 'asmx');
+  }
+
   create_this_module_section() {
     Server.hwcJournal.success(1, "Creating '.gnu.linkonce.this_module' section...");
 
@@ -563,24 +567,20 @@ class CompilerDriver {
     };
 
     const linux_headers_vermagic = require("os").release();
-    if (linux_headers_vermagic.includes("WSL")) {
-      if (linux_headers_vermagic.includes("6.6.87.2")) {
-        struct_module.structSize = 1216;
-        struct_module.nameOffset = 24;
-        struct_module.initOffset = 312;
-        struct_module.exitOffset = 1168;
-        struct_module.moduleNameLen = 56;
-        struct_module.stateOffset = 0;
-        struct_module.refcntOffset = 1176;
+    const resource_data_path = path.join(this.__asmx_get_cache_dir(), `linux-headers_${linux_headers_vermagic}.json`);
+    if (fs.existsSync(resource_data_path)) {
+      const resource_data = JSON.parse(fs.readFileSync(resource_data_path, 'utf-8'));
+      for (const field of Reflect.ownKeys(resource_data)) {
+        struct_module[field] = resource_data[field];
       }
-    } else if (linux_headers_vermagic.includes("6.17.9-arch1-1")) {
-      struct_module.structSize = 1344;
-      struct_module.nameOffset = 24;
-      struct_module.initOffset = 336;
-      struct_module.exitOffset = 1280;
-      struct_module.moduleNameLen = 56;
-      struct_module.stateOffset = 0;
-      struct_module.refcntOffset = 1288;
+      Server.driverJournal.success(2, `Loaded kernel layout from cache: ${resource_data_path}`);
+      Server.driverJournal.success(1, `Received ${fs.statSync(resource_data_path).size} bytes of the data (linux-headers)`);
+    } else {
+      // [ERR_BUFFER_OUT_OF_BOUNDS]: Attempt to access memory outside buffer bounds
+      Server.driverJournal.warn(0, `Unknown kernel version: ${linux_headers_vermagic}`);
+      Server.driverJournal.warn(0, `Please run: asmx -S linux-headers`);
+      Server.driverJournal.error(0, "Cannot determine struct module offsets.");
+      process.exit(1);
     }
 
     const moduleStructBuffer = Buffer.alloc(struct_module.structSize, 0);
@@ -695,7 +695,7 @@ class CompilerDriver {
   }
 
   token_attributes_has(attributes, has_attr) {
-    return attributes?.some(attr => this.token_unwrap(this.identifer_unwrap(attr)) === has_attr);
+    return attributes?.some(attr => this.token_unwrap(this.identifier_unwrap(attr)) === has_attr);
   }
 
   check_unique_single_attributes_fn(...attributes) {
@@ -720,9 +720,9 @@ class CompilerDriver {
   }
 
   collect_fn(expr_unwrap, expression) {
-    const name_token = this.identifer_unwrap(expression.name || expr_unwrap.name);  // Адаптируйте
+    const name_token = this.identifier_unwrap(expression.name || expr_unwrap.name);  // Адаптируйте
     const fn_name = name_token.lexem;
-    const attributes = expr_unwrap.attributes?.map(attr => this.token_unwrap(this.identifer_unwrap(attr))) || [];
+    const attributes = expr_unwrap.attributes?.map(attr => this.token_unwrap(this.identifier_unwrap(attr))) || [];
     const isInit = attributes.includes('__init');
     const isExit = attributes.includes('__exit');
 
@@ -769,12 +769,12 @@ class CompilerDriver {
       const templateRT = expr_unwrap.returnTypeOfValue;
       if (templateRT == null) break $main;
 
-      if (templateRT.type != TypeOfAtomicExpression.IDENTIFER) {
+      if (templateRT.type != TypeOfAtomicExpression.IDENTIFIER) {
         const reason = "The main function can be only simple RT";
         new exceptions.TracewayException("TeRT Exception", { traceway: [{ filepath: this.source, token: name_token, reason }] }, "ConstexprException");
       }
 
-      const nameRT = this.token_unwrap(this.identifer_unwrap(templateRT));
+      const nameRT = this.token_unwrap(this.identifier_unwrap(templateRT));
       if (nameRT != "void") {  
         const reason = "The main function could return void. \n\t main -> void { ... }";
         new exceptions.TracewayException("TeRT Exception", { traceway: [{ filepath: this.source, token: name_token, reason }] }, "ConstexprException");
@@ -788,10 +788,10 @@ class CompilerDriver {
       isMain: is_main,
       isInit: isInit,
       isExit: isExit,
-      attributes: expr_unwrap.attributes?.map(attr => this.token_unwrap(this.identifer_unwrap(attr))) || [],
+      attributes: expr_unwrap.attributes?.map(attr => this.token_unwrap(this.identifier_unwrap(attr))) || [],
       arguments: expr_unwrap.arguments,
       returnTypeOfValue: expr_unwrap.returnTypeOfValue,
-      token: this.identifer_unwrap(expression.name || expr_unwrap.name),
+      token: this.identifier_unwrap(expression.name || expr_unwrap.name),
     });
 
     this.vartable.set(fn_name, { type: 'function', section: '.text' });

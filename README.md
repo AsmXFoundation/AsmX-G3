@@ -1,6 +1,6 @@
 # AsmX G3 Compiler
 
-[ChangeLog](./changelog)
+[ChangeLog](./changelogs/main.md)
 
 ## Requires
 
@@ -81,6 +81,20 @@ asmx ./examples/libm \
 sudo gcc -o ./examples/test_main ./examples/libm_test.c -L. -lasmm
 
 LD_LIBRARY_PATH=. ./examples/test_main
+```
+
+use `raptor` driver:
+```sh
+asmx ./examples/g4/libm \
+  --release --target amd64 \
+  -o libasmm-v2.so \
+  --features all \
+  --emergency-panic --verbose-common 10 \
+  --use-raptor
+
+sudo gcc -o ./examples/test_main ./examples/libm_test.c -L. -lasmm
+
+LD_LIBRARY_PATH=. ./examples/g4/test_main
 ```
 
 ### Options

@@ -1,3 +1,4 @@
+;; asmx --emergency-panic --verbose-common 10 --release --target amd64 ./examples/compile -o compiled
 
 @section rodata {
   message: str("Hello World!\n"),

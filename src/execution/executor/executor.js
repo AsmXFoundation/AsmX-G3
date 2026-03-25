@@ -93,8 +93,8 @@ class IntermediateRepresentationCompiler {
           if (expression instanceof Expression) {
             if (expression.type == TypeOfAtomicExpression.PARENTHESIS) {
               pass = expression.body.parentheses[0];
-            } else if (expression.type == TypeOfAtomicExpression.IDENTIFER) {
-              pass = expression.body.identifer;
+            } else if (expression.type == TypeOfAtomicExpression.IDENTIFIER) {
+              pass = expression.body.identifier;
             } else {
               pass = expression.id;
             }

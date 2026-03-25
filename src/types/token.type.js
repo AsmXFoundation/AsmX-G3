@@ -6,7 +6,7 @@ class TypeOfToken {
   static COMMA = 'COMMA';
   static SEMICOLON = 'SEMICOLON';
   static COLON = 'COLON';
-  static IDENTIFER = 'IDENTIFER';
+  static IDENTIFIER = 'IDENTIFIER';
   static NUMBER = 'NUMBER';
   static APOSTROPHE_STRING = 'APOSTROPHE_STRING';
   static STRING = 'STRING';
@@ -14,7 +14,7 @@ class TypeOfToken {
   static DOT = 'DOT';
   static DOLLAR = 'DOLLAR';
   static BANG = 'BANG';
-  static PIPE = 'PIPE';
+  static PIPE = 'PIPE'; // |
   static AMPERSAND = 'AMPERSAND'; // &
   static OPEN_PAREN = 'OPEN_PAREN'; // (
   static CLOSE_PAREN = 'CLOSE_PAREN'; // )
@@ -30,12 +30,12 @@ class TypeOfToken {
   static MINUS_EQUAL = 'MINUS_EQUAL';
   static MULTIPLY_EQUAL = 'MULTIPLY_EQUAL';
   static DIVIDE_EQUAL = 'DIVIDE_EQUAL';
-  static ELLIPSIS = 'ellipsis'; // ...
+  static ELLIPSIS = 'ELLIPSIS'; // ...
   static EOF = 'EOF';
 
   static CUSTOM = {
-    ARROW: 'ARROW',
-    SCOPE: 'SCOPE'
+    ARROW: 'ARROW', // ->
+    SCOPE: 'SCOPE'  // ::
   }
 
   static CLASSIFICATION = {

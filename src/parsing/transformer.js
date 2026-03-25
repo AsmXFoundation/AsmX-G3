@@ -11,7 +11,7 @@ class Transformer {
       const token = this.getToken();
 
       if (token.type == TypeOfToken.DOGE) {
-        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFER) {
+        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFIER) {
           let newLexem = token.lexem + this.getNextToken().lexem;
 
           result.push({
@@ -29,7 +29,7 @@ class Transformer {
       }
 
       else if (token.type == TypeOfToken.DOLLAR || token.type == TypeOfToken.PERCENT) {
-        if (token.current == this.getNextToken().current - 1 && [TypeOfToken.NUMBER, TypeOfToken.IDENTIFER].map(type => this.getNextToken().type == type).some(Boolean)) {
+        if (token.current == this.getNextToken().current - 1 && [TypeOfToken.NUMBER, TypeOfToken.IDENTIFIER].map(type => this.getNextToken().type == type).some(Boolean)) {
           let newLexem = token.lexem + this.getNextToken().lexem;
           newLexem = newLexem.replace('%', '$');
 

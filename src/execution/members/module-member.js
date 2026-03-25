@@ -18,7 +18,7 @@ class ModuleMember extends MemberBaseConstructor {
     let pathOfModule;
 
     if (data.hasOwnProperty('module')) {
-      if (data.module.type === TypeOfAtomicExpression.IDENTIFER) {
+      if (data.module.type === TypeOfAtomicExpression.IDENTIFIER) {
         RuntimeException.exceptDefaultTracewayException(expression.body.id, 'Feature not implemented yet');
       } else {
         pathOfModule = PerformerOfAtomicExpression.getValueByExpression(data.module);
@@ -43,7 +43,7 @@ class ModuleMember extends MemberBaseConstructor {
 
           const bufferImportDirectory = path.dirname(Router.ROUTE_IMPORT_DIRECTORY);
 
-          Router.addTraceWayException({ token: expression.body.id, filepath: Router.TRACEWAY_FILES.last(), reason: 'Exception in the implementation of module import' });
+          Router.addTraceWayException({ token: expression.body.id, filepath: Router.TRACEWAY_FILES.at(-1), reason: 'Exception in the implementation of module import' });
           Router.addTracewayFile(fullPath);
           Router.setRouteImportDirectory(path.dirname(fullPath));
 

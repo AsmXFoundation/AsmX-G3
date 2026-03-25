@@ -67,7 +67,7 @@ class RecursiveDescentParser {
         this.index++;
 
         const previousNode = this.getLastItemAST();
-        this.trackerTokens = [];
+        // this.trackerTokens = [];
 
         if (this.mode == Runtime.JCC_COMPILATION_MODE && TypeOfInstructionExpression.has(token.lexem, 'export')) {
           SyntaxScannerExpression.scanLeftSideOfExportInstruction(token, previousNode, this.getNextToken());
@@ -80,10 +80,10 @@ class RecursiveDescentParser {
         if (this.peek() == undefined) { }
 
         else if (this.peek().type == TypeOfToken.SEMICOLON) {
-          this.trackerTokens = [];
+          // this.trackerTokens = [];
         } else if (this.peek().type == TypeOfToken.INSTRUCTION) {
           SyntaxScannerExpression.scanCorrectOrderInstruction(token, this.peek());
-          this.trackerTokens.push(token);
+          // this.trackerTokens.push(token);
         }
 
         const ast = [];
@@ -180,7 +180,7 @@ class RecursiveDescentParser {
           // 6. Construct AST strictly for Builder compatibility
           const declNode = declNodes[declNodes.length - 1]; // The actual function name/call (last item if attributes exist)
           const attributes = declNodes.slice(0, -1);
-          
+
           ast.push(...attributes); // Push attributes first
 
           if (declNode.type === TypeOfAtomicExpression.CALL) {
@@ -188,7 +188,7 @@ class RecursiveDescentParser {
             // Builder logic (else block) expects: ast[0] (CALL) and ast[1] (BODY)
             ast.push(declNode);
             ast.push(bodyNodes[0]);
-          } else if ([TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.MEMBER].includes(declNode.type)) {
+          } else if ([TypeOfAtomicExpression.IDENTIFIER, TypeOfAtomicExpression.MEMBER].includes(declNode.type)) {
             const commonExpression = new Expression(TypeOfAtomicExpression.CALL, { parentheses: [], caller: declNode, arguments: [] });
             ast.push(commonExpression);
             // ast.push(declNode);
@@ -234,6 +234,7 @@ class RecursiveDescentParser {
           const { bufferAST, bufferIndex, bufferSizeTokens, bufferTokens } = this.startRecursive();
           const nodes = this.parser(possibleTerms);
           this.endRecursive(bufferAST, bufferIndex, bufferSizeTokens, bufferTokens);
+          // const nodes = this.getNodes(possibleTerms);
           ast.push(...nodes);
         }
 
@@ -257,7 +258,7 @@ class RecursiveDescentParser {
         if (this.mode == Runtime.JCC_COMPILATION_MODE) {
           commonExpression.body.link = this.getNextToken();
         } else if (this.mode == Runtime.ZCC_COMPILATION_MODE) {
-          commonExpression.body.link = new Expression(TypeOfAtomicExpression.IDENTIFER, { identifer: this.getNextToken() });
+          commonExpression.body.link = new Expression(TypeOfAtomicExpression.IDENTIFIER, { identifier: this.getNextToken() });
         }
 
         if (lastItemOfAST instanceof Expression && lastItemOfAST.type == TypeOfAtomicExpression.MEMBER) {
@@ -274,6 +275,7 @@ class RecursiveDescentParser {
 
       else if (this.isOpenPair(token)) {
         this.recursiveParse(token);
+        // this.index++; // for close token
       }
 
       else if (token.type == TypeOfToken.PIPE) {
@@ -293,7 +295,7 @@ class RecursiveDescentParser {
         if (this.getNextToken() && this.getNextToken().type == TypeOfToken.DOT) {
           this.index++;
 
-          if (this.getNextToken() && this.getNextToken().type == TypeOfToken.IDENTIFER) {
+          if (this.getNextToken() && this.getNextToken().type == TypeOfToken.IDENTIFIER) {
             const extension = this.getNextToken();
             this.index++;
 
@@ -318,13 +320,13 @@ class RecursiveDescentParser {
         this.push(commonExpression);
       }
 
-      else if (token.type == TypeOfToken.IDENTIFER && ['true', 'false'].includes(token.lexem)) {
+      else if (token.type == TypeOfToken.IDENTIFIER && ['true', 'false'].includes(token.lexem)) {
         const commonExpression = new Expression(TypeOfAtomicExpression.LITERAL, { boolean: token });
         commonExpression.extends({ subtype: TypeOfAtomicExpression.LITERALS.BOOLEAN });
         this.push(commonExpression);
       }
 
-      else if (token.type == TypeOfToken.IDENTIFER) {
+      else if (token.type == TypeOfToken.IDENTIFIER) {
         if (this.getLastItemAST() instanceof Expression && this.getLastItemAST()?.subtype == TypeOfAtomicExpression.LITERALS.NUMBER) {
           const token_number = this.getLastItemAST();
 
@@ -371,7 +373,7 @@ class RecursiveDescentParser {
             }
           }
         } else {
-          const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFER, { identifer: token });
+          const commonExpression = new Expression(TypeOfAtomicExpression.IDENTIFIER, { identifier: token });
           this.push(commonExpression);
         }
       }
@@ -426,7 +428,7 @@ class RecursiveDescentParser {
           const { bufferAST, bufferIndex, bufferSizeTokens, bufferTokens } = this.startRecursive();
           const nodes = this.parser(subExpression);
           this.endRecursive(bufferAST, bufferIndex, bufferSizeTokens, bufferTokens);
-
+          // const nodes = this.getNodes(subExpression);
 
           if (SyntaxScannerItem.mode == SyntaxScannerItem.MODES.signature) {
             SyntaxScannerExpression.Item.signature(token, nodes, 'Signature item', false);
@@ -698,6 +700,7 @@ class RecursiveDescentParser {
     const { bufferAST, bufferIndex, bufferSizeTokens, bufferTokens } = this.startRecursive();
     const nodes = this.parser(possibleTerms);
     this.endRecursive(bufferAST, bufferIndex, bufferSizeTokens, bufferTokens);
+    // const nodes = this.getNodes(possibleTerms); // safe mode
 
     const previousNode = this.getLastItemAST();
 
@@ -784,7 +787,7 @@ class RecursiveDescentParser {
     else if (token.type == TypeOfToken.OPEN_CURLY_BRACKET) {
       const lastItemOfAST = this.getLastItemAST();
 
-      if (lastItemOfAST && [TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.MEMBER].includes(lastItemOfAST.type)) {
+      if (lastItemOfAST && [TypeOfAtomicExpression.IDENTIFIER, TypeOfAtomicExpression.MEMBER].includes(lastItemOfAST.type)) {
         commonExpression.upgradeType(TypeOfAtomicExpression.INIZIALIZER);
         let values = nodes;
 
@@ -840,6 +843,36 @@ class RecursiveDescentParser {
     return nodes;
   }
 
+  withContext(mode, callback) {
+    const previousMode = SyntaxScannerItem.mode;
+    SyntaxScannerItem.mode = mode;
+    try {
+      return callback();
+    } finally {
+      SyntaxScannerItem.mode = previousMode;
+    }
+  }
+
+  /**
+   * @description
+   * If we call the `walkToClosePair` function together with `GetNodes`, 
+   * which is related to the fact that we're creating nodes from parenthesized expressions, 
+   * we need to increment the index because the current token will be some closed parenthesis after getting the nodes.
+   * @example
+     ```
+    const pairTokens = this.walkToClosePair(this.peek());
+    pairTokens.shift(); // remove open
+    pairTokens.pop();   // remove close
+
+    const nodes = this.withContext(SyntaxScannerItem.MODES.signature, () => {
+      return this.getNodes(pairTokens);
+    });
+
+    this.index++; // skip the close token
+    ```
+   * @param {TypeOfToken[]} possibleTerms 
+   * @returns {TypeOfAtomicExpression[]}
+   */
   getNodes(possibleTerms) {
     const { bufferAST, bufferIndex, bufferSizeTokens, bufferTokens } = this.startRecursive();
     const nodes = this.parser(possibleTerms);
@@ -861,12 +894,24 @@ class RecursiveDescentParser {
   }
 
   matchClosePair(token) {
+    return this.matchClosePairByTokenType(token.type);
+  }
+
+  matchClosePairByTokenType(type) {
     return {
       [TypeOfToken.OPEN_PAREN]: TypeOfToken.CLOSE_PAREN,
       [TypeOfToken.OPEN_SQUARE_BRACKET]: TypeOfToken.CLOSE_SQUARE_BRACKET,
       [TypeOfToken.OPEN_CURLY_BRACKET]: TypeOfToken.CLOSE_CURLY_BRACKET,
       [TypeOfToken.LESS]: TypeOfToken.GREATER
-    }[token.type];
+    }[type];
+  }
+
+  advance() {
+    if (arguments.length > 0) {
+      for (let argument of arguments) argument += 1;
+      return;
+    }
+    this.index += 1;
   }
 
   peek() {

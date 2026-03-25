@@ -19,7 +19,7 @@ class RuntimeException extends SyntaxScannerBaseConstructor {
         new exceptions.TracewayException(this.MESSAGES.EXPRESSION_IS_NOT_VALID_IN_THIS_CONTEXT, {
           traceway: [
             ...Router.TRACEWAY_EXCEPTION,
-            { token, filepath: Router.TRACEWAY_FILES.last(), reason }
+            { token, filepath: Router.TRACEWAY_FILES.at(-1), reason }
           ]
         });
       }

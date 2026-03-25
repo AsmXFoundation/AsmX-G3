@@ -1,0 +1,199 @@
+# Changelog v31.0.0-rev1.0
+
+**Release date:** March 23, 2025
+**Target:** AsmX G3 Compiler — v31.0.0 (revision 1.0)
+
+---
+
+# AsmX-G3: Raptor Engine Core — Changelog v31.0.0-rev1.0
+
+This release marks a fundamental architectural shift for the AsmX ecosystem. We are officially transitioning from the legacy core to the **`Raptor Engine`**, a high-performance, type-safe compilation pipeline designed for systems-level development, kernel-mode modules, and shared library synthesis.
+
+# 1. High-Level Architecture: Raptor Compilation Pipeline
+
+The transition to the Raptor Engine marks a fundamental paradigm shift in AsmX. The legacy driver used a straightforward approach: the lexer passed tokens to a basic recursive descent parser, which almost instantly translated them into a flat list of instructions for the hardware compiler. This made complex static analysis and multi-pass optimizations impossible.
+
+Raptor introduces a rigorous, multi-level architecture (Frontend-Backend Split):
+- **Lexer:** Source code tokenization.
+- **Transformer V2:** Pre-normalization of tokens and resolution of complex lexical constructs (lookahead).
+- **Pratt Parser (Recursive Descent + Precedence Climbing):** Construction of a strongly typed abstract syntax graph (AST).
+- **Semantic Analyzer:** AST traversal, type checking, scope management, and symbol resolution.
+- **Compiler Driver (Raptor):** A bridge between the high-level AST and the low-level hardware representation (Hardware Mapping).
+- **Hardware Compiler:** Generation of final object code or binary file.
+
+This phase isolation ensures **strict type safety**. Errors are caught during the semantic analysis stage, before the driver attempts to generate machine code, preventing the generation of incorrect assembly instructions due to type mismatches.
+
+# 2. Transformer V2: Intelligent Token Preprocessing
+In the Legacy core, `Transformer` performed basic macro substitutions. `Transformer V2` in Raptor acts as an intelligent filter between the lexer and parser, critical to supporting C/C++-style syntax.
+
+The primary function of Transformer V2 is **lookahead logic**.
+
+- **Token Merging:** The lexer can produce three consecutive `DOT` tokens (`.`, `.`, `.`). Transformer V2 uses a lookahead buffer, recognizes this pattern, and collapses them into a single `ELLIPSIS` token (`...`), necessary for variadic functions.
+
+Without this pre-parsing step, the basic recursive descent parser would be overloaded with backtracking logic, which would have a catastrophic impact on performance (O(n^2) or worse in the worst cases).
+
+# 3. Pratt Parsing & Precedence: Precedence Resolution
+The heart of the new parser in `parser.cts` is the Pratt Parser, which implements the Precedence Climbing algorithm.
+
+- **Mechanics**: Each token (operator) is assigned a binding power. The parser reads expressions as long as the next operator has a higher precedence than the current context. This elegantly solves the problem of left- and right-hand associativity for binary, unary-prefix, and unary-postfix operators.
+
+- **The "Angle Bracket" Problem:** One of the most famous problems in C++ parsing is the token `<`. Is it the "less than" operator (`a < b`) or the beginning of a template/generic parameter list (`vector<int>`)?
+Raptor solves this with the `angleBracketIsOperator` context flag. When the parser enters a type expectation context, the flag is toggled, causing the Pratt parser to treat `<` and `>` as structural delimiters rather than binary operators.
+- **Recursive Shadowing:** This allows Raptor to handle highly nested C++ style constructs, such as function pointers: `int32_t (*funcPtr)(int32_t, int32_t)`. The parser identifies the nested parentheses and builds a `Call` node inside an `Identifier` node, maintaining the correct associativity.
+
+# 4. Syntax and AST Evolution: Tree Structure
+The legacy system allows for flat enumerations such as `TypeOfAtomicExpression`. Raptor Engine represents a strongly typed hierarchy of node classes (Nodeclass), registered in `Syntax.Kind` and `Syntax.Type`.
+
+- **New structural nodes:** Instead of atomic instructions, complex nodes such as `FunctionDeclaration`, `ImplicitCastExpression`, and `DivisionFieldDecl` are now analyzed.
+
+- **NodeShape and Factory Patterns:** Each node conforms to a strict `NodeShape` interface. Factories (the Factory pattern) are used to create nodes, which ensure that an AST node always contains positional metadata (row/column for identical error messages) and valid child nodes. This makes the AST tree a type-safe contract for the driver.
+
+Comparison:
+- **Legacy:** Function was an `INSTRUCTION` with an ast array.
+- **Raptor:** Function is a `FunctionDeclaration` node with dedicated fields for `modifiers` (`static`/`const`), `parameters` (as `ParameterDeclaration` nodes), and `returnType`.
+
+# 5. The Type System: QualType & Semantic Analysis
+
+This is the "Brain" of the Raptor Engine. We’ve introduced a fully-featured Type System that mirrors C++ standard behaviors.
+
+## QualType & CV-Qualifiers
+Types are now represented as `QualType`, which separates the base type (e.g., `int32_t`) from its "CV" status (`const`, `volatile`).
+
+**Separation of logic:** The base type (`AnyType` e.g., `int32_t`, etc) is separated from its qualifiers. Qualifiers (CV-Qualifiers: `const`, `volatile`) are stored as properties within the `QualType` wrapper.
+
+**Function Decay:** Implemented function-to-pointer decay rules. Functions are registered as `QualType(Pointer(FunctionAnyType))`, allowing them to be assigned to function pointers seamlessly.
+
+# 6. The Semantic Firewall (Semantic Analyzer)
+
+The Analyzer performs a full traversal of the AST before a single byte of machine code is generated:
+- **Instruction Validation:** It checks the `is_valid_instruction_operand` rule. For instance, it verifies that the `@syscall` instruction's operand is a `Tuple` (List), matching the Linux kernel's ABI requirements.
+- **Scope management:** A multi-level system is implemented via `SymbolTable.Environment`: `Global`, `Section` (for `.data`/`.text`), `Fn` (functions), and `Local` (`{}` blocks).
+- **Symbol Shadowing:** It detects when a local variable "shadows" a global one, issuing warnings or errors based on the `StorageClass`.
+
+# 7. The Initializer Checker: Decay and Compatibility
+
+The logic in `InitializerChecker` is responsible for verifying the correctness of assignments and initializations. A simple assignment check is insufficient here.
+
+- **Nullptr Logic:** Unlike the legacy core, nullptr is a distinct primitive. The checker ensures that nullptr can only initialize `PointerType` or `nullptr`, throwing an error if a developer attempts to initialize an `int32_t` with `nullptr`.
+  ```cxx
+  const int32_t *p = nullptr; // OK
+  const int32_t p = nullptr; // Error: cannot assign nullptr to int32_t
+  ```
+
+- **Array-to-Pointer Decay:** `InitializerChecker` implements decay rules. For example, "array-to-pointer decay" allows you to safely initialize a `const char*` with a string literal (character array), automatically performing implicit type casts.
+    ```cxx
+    const char* str = "string"; // OK: Implicitly converts the character array to a pointer to its first element
+    ```
+
+- **Initialization vs. Assignment:** The checker allows `const T x = val` (Initialization), but the `TypeChecker` blocks `x = val` (Assignment) if `x` is const-qualified.
+    ```cxx
+    const char char_a = 'a';
+    char_a = 'd'; // [type error] cannot assign to a const-qualified lvalue
+    ```
+
+    ```cxx
+    int32_t (*funcPtr)(int32_t, int32_t) = "foo_int32_t"; // [type error] cannot initialize 'int32_t (*)(int32_t, int32_t)' with 'const char*'
+    ```
+
+# 8. Advanced Casting Mechanics
+
+In Raptor Engine, type casts are not just a compiler tag change, they are AST nodes (`ImplicitCastExpression`) that are processed by the analyzer.
+
+- **`const_cast<T>`:** The only cast allowed to add or remove const/volatile qualifiers on the underlying type.
+```cxx
+[ExpressionException]: [type error] invalid const_cast: const_cast can only be used with pointers or references
+71 |	
+72 |	 int16_t casted = const_cast<int32_t>(2026);
+73 |	                  ^-----------------------
+```
+
+- **`static_cast<T>`:** Used for standard conversions. It performs size checking via AnyType.size().
+```cxx
+[ExpressionException]: [type error] cannot initialize 'int16_t' with 'int32_t'
+71 |	
+72 |	 int16_t casted = static_cast<int32_t>(2026);
+73 |	 ^-----------------------------------------
+```
+
+- **`reinterpret_cast<T>`:** The low-level escape hatch. It allows raw pointer punning, essentially telling the compiler to ignore the type system for a specific memory block.
+```cxx
+int16_t casted = reinterpret_cast<int16_t>(2026); // OK
+int16_t casted = reinterpret_cast<int32_t>(2026); // [type error] cannot initialize 'int16_t' with 'int32_t'
+```
+
+**Value Categories:** Raptor Engine strictly adheres to the rules of value categories. Casts typically produce a `PRValue` (Pure R-Value—a temporary value, the result of a calculation), with the exception of reference type casts, which retain `LValue` (memory location) status.
+
+# 9. The Compiler Driver (The Operand Bridge)
+The Raptor serves as the bridge between the abstract AST and the concrete `HardwareMachineFactory` (HWM). The legacy driver was a monolith; the Raptor Driver is a Translation Layer.
+
+### The Operand Bridge Pattern
+
+The driver implements `operand_to_hwm`, which maps high-level nodes to hardware-ready operands:
+- `UnaryExpression` with `%` → `parseReg(name)`
+- `Literal` with `NumberLiteral` → `parseImm(value)`
+- `UnaryExpression` with `&` → Deferred Relocation.
+
+This decoupling allows AsmX to support different instruction sets by simply swapping the Driver's mapping logic, without ever touching the Parser or the Lexer.
+
+
+# 10. Kernel-Mode Orchestration: Dynamic Module Linking (.ko)
+Perhaps the most important system update in AsmX-G3 is the redesigned Linux kernel module (`.ko`) synthesis engine.
+
+- **Dynamic Kernel Sync:** The legacy driver had hardcoded kernel structure offsets, which locked the compiler to a specific version (historically, `6.17.9-arch1-1`).
+**Raptor now supports any Linux kernel version.** Using the new `asmx -S linux-headers` (Sync Resource) command, the compiler downloads, parses, and caches the target OS headers.
+
+- **Section Generation:** Raptor automatically synthesizes the required `.gnu.linkonce.this_module` section during the linking phase.
+
+- **modinfo validation:** The driver extracts kernel information from downloaded headers and validates the module's `modinfo` section against the target system's `os.release()`, ensuring correct `Module.symvers` and preventing Kernel Panic when executing `insmod`.
+
+
+# 11. CLI & Dev Tooling
+Raptor introduces powerful diagnostic flags for systems engineers:
+- **`--use-raptor`:** Toggles the new engine.
+- **`--debug-only-lexer-repl`:** An interactive shell to see how the Transformer V2 fuses tokens.
+- **`--debug-ast-dump-repl`:** Permits entering Raptor syntax and viewing the resulting PrintTree AST in real-time.
+- **`-S <resource>`:** Synchronizes local caches with the system environment (essential for the dynamic kernel support).
+
+# 11. CLI & Developer Tooling — Introspection and REPL
+With the introduction of the Raptor Engine, AsmX-G3 significantly expands developers' capabilities for on-the-fly code verification. The compiler now provides tools for "hot testing" the lexer and parser, as well as a mechanism for synchronizing with the host environment.
+
+### **1. Categorization of New Flags (Help System)**
+To ensure a logical documentation structure, the new flags are categorized as follows:
+
+| **Flag**                  | **Category help=**     | **Description**   
+|-------------------------- |------------------------|----------------
+| `--use-raptor`            |   `compiler-options`   | Activates the Raptor Engine core (new parser, semantics, and driver).
+| `-S`, `--sync`            |   `compiler-options`   | Synchronizes system resources (e.g., linux-headers) for building kernel modules.
+| `--ast-dump`              |   `debug`              | Prints a visual AST tree for the current source file.
+| `--debug-only-lexer`      |   `debug`              | Runs only the lexical analyzer and prints token states.
+| `--debug-only-lexer-repl` |   `debug`              | Interactive shell (REPL) for real-time lexer debugging.
+| `--debug-ast-dump-repl`   |   `debug`              | Interactive shell for testing Raptor syntax and instantly visualizing the AST.
+
+### **2. Technical Implementation of Diagnostic Tools**
+Raptor introduces two levels of interactive debugging via `llvm.llvm().repl`. This allows developers to test complex constructs in isolation before implementing them in the codebase.
+
+- **Lexer REPL:** Uses T`ransformer.transform` to demonstrate how raw symbols (sigils) are transformed into typed tokens (Instructions, Registers).
+
+- **AST REPL:** Allows you to enter Raptor syntax (e.g., complex function pointer declarations) and immediately see the output of `PrintTree`. This is critical for verifying operator precedence in Pratt Parser.
+
+The `--ast-dump` flag uses the `print` module, which recursively traverses the `Syntax.Node` tree. Unlike the old output, PrintTree displays:
+- **Kind & Type:** The node type (e.g., `BinaryExpression`) and its subtype (`Assignment`).
+- **Source Locations:** The exact `<line:col>` coordinates for each node, taken from the `StructToken`.
+- **Identifier Parts:** Separation of complex identifiers (using `::` or `.`).
+
+The `--sync` flag (alias `-S`) solves the portability issue between kernel versions. It runs a Makefile in the s`rc/resources/linux-headers` directory, which:
+- Compiles a temporary probe module.
+- Extracts the `struct module` metadata via `dmesg`.
+- Caches it in `.cache/asmx/linux-headers_$(uname -r).json`.
+- This allows Raptor to be **kernel-independent**, dynamically adapting to the memory layout of a particular system.
+
+# 12. Comparison Summary: Legacy vs. Raptor
+**Feature**         |	**Legacy Driver**             |	**Raptor Driver (G4 Evolution)**
+--------------------|-------------------------------|-----------------------------
+**Parsing**	        | Top-down Recursive Descent	  | Pratt (Precedence Climbing) + Recursive Descent
+**Validation**	    | Reactive (Error at emission)  | Proactive (Semantic Analyzer Pass)
+**Type Safety**	    | Implicit / String-based	      | Strict `QualType` (CV-qualified)
+**Kernel Support**	| Version-Locked	              | Version-Agnostic (Dynamic Sync)
+**Memory Access**   | Basic `@mov &var, %reg`	      | Intelligent `@lea &var, %reg` with deferred RIP patching
+**Code Generation**	| Direct HWM calls	            | Abstracted "Operand Bridge" Pattern
+**Casting**	        | None (Raw)	                  | `static`, `const`, `reinterpret` support

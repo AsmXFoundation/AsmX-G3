@@ -31,7 +31,7 @@ class TypeOfAtomicExpression {
   static CALL = this.conv('Call');
   static MEMBER = this.conv('Member');
   static LITERAL = this.conv('Literal');
-  static IDENTIFER = this.conv('Identifer');
+  static IDENTIFIER = this.conv('Identifier');
 
   static extractTokenOfExpression(expression) {
     if (this.LITERAL == expression.type) {

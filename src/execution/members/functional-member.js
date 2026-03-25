@@ -18,9 +18,9 @@ class FunctionalMember extends MemberBaseConstructor {
     body = body.body.body;
 
     if (node.name.type == TypeOfAtomicExpression.CALL) {
-      tokenOfName = node.name.body.caller.body.identifer;
+      tokenOfName = node.name.body.caller.body.identifier;
     } else {
-      tokenOfName = node.name.body.identifer;
+      tokenOfName = node.name.body.identifier;
     }
 
     name = tokenOfName.lexem;

@@ -10,11 +10,11 @@ class AtomicIntermediateRepresentationCompiler {
 
     if (expression?.type == TypeOfAtomicExpression.CALL) {
       return SystemMember.__call__expr__(expression);
-    } else if (expression?.type == TypeOfAtomicExpression.IDENTIFER) {
+    } else if (expression?.type == TypeOfAtomicExpression.IDENTIFIER) {
       const hardware = new Hardware();
 
-      if (Object.values(hardware.types).includes(expression.body.identifer.lexem)) {
-        return new typeid(expression.body.identifer.lexem);
+      if (Object.values(hardware.types).includes(expression.body.identifier.lexem)) {
+        return new typeid(expression.body.identifier.lexem);
       } else {
         RuntimeException.except(expression.body[Reflect.ownKeys(expression.body)[0]], 'Unsupported literal type');
       }

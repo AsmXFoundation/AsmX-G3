@@ -24,7 +24,7 @@ class HardwareBaseConstructor {
       this.modeCurrent.push(0);
       let hash, commit;
 
-      if ((hash = this.modeTable.last(0)) != undefined) {
+      if ((hash = this.modeTable.at(0)) != undefined) {
         if ((commit = svc.repository_reset(hash))) {
           this.registers = { ...commit.changes.registers };
 
@@ -46,7 +46,7 @@ class HardwareBaseConstructor {
         const DRIVER_INSTANCE = new DRIVER_GET;
         const changes = { registers: this.registers };
 
-        if (this.modeCurrent.last() == 0) {
+        if (this.modeCurrent.at(-1) == 0) {
           changes.builtin_functions = {};
 
           for (const key of Reflect.ownKeys(BuiltinHardwareFunctions)) {
@@ -58,7 +58,7 @@ class HardwareBaseConstructor {
 
         const hash = svc.repository_add(changes, `Set mode '${DRIVER_NAME}'`);
         svc.repository_push();
-        this.modeTable.set(this.modeCurrent.last(), hash);
+        this.modeTable.set(this.modeCurrent.at(-1), hash);
         this.modeCurrent.push(number);
 
         const static_methods = Reflect.ownKeys(DRIVER_GET);

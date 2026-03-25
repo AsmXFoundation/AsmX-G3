@@ -57,16 +57,16 @@ class OperandParser {
   }
 
   static is_variable_value(operand) {
-    if (operand.type == TypeOfAtomicExpression.IDENTIFER) {
-      return operand.body.identifer.lexem.startsWith('$');
+    if (operand.type == TypeOfAtomicExpression.IDENTIFIER) {
+      return operand.body.identifier.lexem.startsWith('$');
     }
     return false;
   }
 
   static is_variable_address(operand) {
     // &message - get address of the message
-    if (operand.type == TypeOfAtomicExpression.IDENTIFER) {
-      return operand.body.identifer.lexem.startsWith('&');
+    if (operand.type == TypeOfAtomicExpression.IDENTIFIER) {
+      return operand.body.identifier.lexem.startsWith('&');
     }
     return false;
   }
@@ -84,14 +84,14 @@ class OperandParser {
   }
 
   static parse_variable_address(memory) {
-    if (memory.type == TypeOfAtomicExpression.IDENTIFER) {
-      return { type: 'variable_address', address: memory.body.identifer.lexem.slice(1) };
+    if (memory.type == TypeOfAtomicExpression.IDENTIFIER) {
+      return { type: 'variable_address', address: memory.body.identifier.lexem.slice(1) };
     }
   }
 
   static parse_variable_value(memory) {
-    if (memory.type == TypeOfAtomicExpression.IDENTIFER) {
-      return { type: 'variable_value', value: memory.body.identifer.lexem.slice(1) };
+    if (memory.type == TypeOfAtomicExpression.IDENTIFIER) {
+      return { type: 'variable_value', value: memory.body.identifier.lexem.slice(1) };
     }
   }
 }

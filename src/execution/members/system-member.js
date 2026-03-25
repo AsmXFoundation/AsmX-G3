@@ -51,8 +51,8 @@ class SystemMember extends MemberBaseConstructor {
     let tokenOfName, name, parentheses;
     let args = [];
 
-    if (caller.type == TypeOfAtomicExpression.IDENTIFER) {
-      tokenOfName = caller.body.identifer;
+    if (caller.type == TypeOfAtomicExpression.IDENTIFIER) {
+      tokenOfName = caller.body.identifier;
       name = tokenOfName.lexem;
 
       if (expression.body.hasOwnProperty('arguments')) {
@@ -64,8 +64,8 @@ class SystemMember extends MemberBaseConstructor {
       tokenOfName = caller.body.caller;
       args = caller.body.arguments;
 
-      if (tokenOfName.type == TypeOfAtomicExpression.IDENTIFER) {
-        name = tokenOfName.body.identifer.lexem;
+      if (tokenOfName.type == TypeOfAtomicExpression.IDENTIFIER) {
+        name = tokenOfName.body.identifier.lexem;
       } else if (tokenOfName.type == TypeOfAtomicExpression.MEMBER) {
         name = tokenOfName;
         tokenOfName = tokenOfName.body.firstToken;

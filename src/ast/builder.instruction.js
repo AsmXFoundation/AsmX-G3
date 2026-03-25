@@ -87,11 +87,11 @@ class BuilderExpression {
     
     if (ast_node.type == TypeOfAtomicExpression.CALL) {
       node.path = ast_node.body.arguments[0].body;
-      node.alias = ast_node.body.caller.body.identifer;
+      node.alias = ast_node.body.caller.body.identifier;
     } else if (ast_node.type == TypeOfAtomicExpression.MEMBER) {
       node.alias = null;
       node.path = ast_node.body;
-    } else if (ast_node.type == TypeOfAtomicExpression.IDENTIFER) {
+    } else if (ast_node.type == TypeOfAtomicExpression.IDENTIFIER) {
       node.alias = null;
       node.path = ast_node.body;
     }
@@ -102,7 +102,7 @@ class BuilderExpression {
   static zcc_build_section_instruction(ast) {
     ast = ast[0];
     const node = {};
-    node.type = ast.body.inizializer.body.identifer.lexem;
+    node.type = ast.body.inizializer.body.identifier.lexem;
     node.values = ast.body.values;
     return node;
   }

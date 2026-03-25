@@ -12,7 +12,7 @@ class Transformer {
 
       // The build of the instruction
       if (token.type == TypeOfToken.DOGE) {
-        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFER) {
+        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFIER) {
           let newLexem = token.lexem + this.getNextToken().lexem;
 
           result.push({
@@ -31,7 +31,7 @@ class Transformer {
 
       // The build of the %register
       else if (token.type == TypeOfToken.PERCENT) {
-        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFER) {
+        if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFIER) {
           let newLexem = token.lexem + this.getNextToken().lexem;
 
           result.push({
@@ -46,11 +46,11 @@ class Transformer {
 
       // The build of the &address
       else if (token.type == TypeOfToken.AMPERSAND) {
-        if (token.current == this.getNextToken().current - 1 && [TypeOfToken.NUMBER, TypeOfToken.IDENTIFER].includes(this.getNextToken().type)) {
+        if (token.current == this.getNextToken().current - 1 && [TypeOfToken.NUMBER, TypeOfToken.IDENTIFIER].includes(this.getNextToken().type)) {
           let newLexem = token.lexem + this.getNextToken().lexem;
 
           result.push({
-            type: TypeOfToken.IDENTIFER, lexem: newLexem, current: token.current, line: token.line, code: token.code
+            type: TypeOfToken.IDENTIFIER, lexem: newLexem, current: token.current, line: token.line, code: token.code
           });
 
           this.index++;
@@ -72,43 +72,16 @@ class Transformer {
           });
 
           this.index++;
-        } else if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFER) {
+        } else if (token.current == this.getNextToken().current - 1 && this.getNextToken().type == TypeOfToken.IDENTIFIER) {
           let newLexem = token.lexem + this.getNextToken().lexem;
 
           result.push({
-            type: TypeOfToken.IDENTIFER, lexem: newLexem, current: token.current, line: token.line, code: token.code
+            type: TypeOfToken.IDENTIFIER, lexem: newLexem, current: token.current, line: token.line, code: token.code
           });
 
           this.index++;
         } else {
           SyntaxScannerExpression.exceptDefaultTracewayException(token, SyntaxScannerExpression.MESSAGES.INVALID_CHAR);
-        }
-      }
-
-      // The build of the ellipsis
-      else if (token.type === TypeOfToken.DOT) {
-        const nextToken = this.getNextToken();
-        const nextNextToken = this.tokens[this.index + 2]; // Peek ahead +2
-
-        if (nextToken && nextToken.type === TypeOfToken.DOT && nextNextToken && nextNextToken.type === TypeOfToken.DOT) {
-          // Valid '...': combine into ELLIPSIS
-          const newLexem = token.lexem + nextToken.lexem + nextNextToken.lexem; // '...'
-
-          result.push({
-            type: TypeOfToken.ELLIPSIS,
-            lexem: newLexem,
-            current: token.current,
-            line: token.line,
-            code: token.code
-          });
-
-          this.index += 2; // Skip the next two DOTs
-        } else if (nextToken && nextToken.type === TypeOfToken.DOT) {
-          // Invalid '..': error (partial ellipsis)
-          SyntaxScannerExpression.exceptDefaultTracewayException(token, 'Invalid ellipsis: expected three dots \'...\', found only two');
-        } else {
-          // Single '.' or more: if more than three, error later in scanner, but for now push as is
-          result.push(token);
         }
       }
 

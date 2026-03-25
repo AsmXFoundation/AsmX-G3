@@ -2,7 +2,7 @@ const v8 = require('v8');
 const os = require('os');
 const fs = require('fs');
 const Server = require("./server/server.js");
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const tapi = require('./tapi.js');
 const Runtime = require('./execution/runtime.js');
 const llvm_config = require('llvm.js/package.json');
@@ -25,6 +25,7 @@ tapi.bind_exit_flags(['h', 'help'], helper);
 tapi.bind_exit_flags(['help=common'], help_common);
 tapi.bind_exit_flags(['help=llvm'], help_llvm);
 tapi.bind_exit_flags(['help=package'], help_package);
+tapi.bind_exit_flags(['help=debug'], help_debug);
 tapi.bind_exit_flags(['help=compiler-options'], help_compiler_options);
 tapi.bind_exit_flags(['v', 'version'], version);
 tapi.bind_exit_flags(['aliases'], aliases.printAliases);
@@ -35,6 +36,7 @@ tapi.bind_exit_flags(['llvm-dumpversion'], llvm_dumpversion);
 tapi.bind_exit_flags(['llvm-repository'], llvm_repository);
 tapi.bind_exit_flags(['features-list'], get_features_list);
 tapi.bind_exit_flags(['multiclean'], build_multiclean);
+tapi.bind_exit_flags(['sync'], sync_resource);
 
 tapi.bind_single_flags('h', 'help');
 tapi.bind_single_flags('v', 'version');
@@ -49,6 +51,11 @@ tapi.bind_single_flags('llvm-repository');
 tapi.bind_single_flags('r', 'release');
 tapi.bind_single_flags('q', 'quiet');
 tapi.bind_single_flags('emergency-panic');
+tapi.bind_single_flags('debug-only-lexer');
+tapi.bind_single_flags('debug-only-lexer-repl');
+tapi.bind_single_flags('debug-ast-dump-repl');
+tapi.bind_single_flags('ast-dump');
+tapi.bind_single_flags('use-raptor');
 
 // Supervisor flags
 tapi.bind_single_flags('multiboot');
@@ -60,6 +67,7 @@ tapi.bind_multiple_group_value_pair_flag('source');
 tapi.bind_multiple_group_value_pair_flag('include');
 
 // tapi.bind_pair_flags('objname');
+tapi.bind_pair_flags('sync');
 tapi.bind_pair_flags('target');
 tapi.bind_pair_flags('march');
 tapi.bind_pair_flags('features');
@@ -89,6 +97,7 @@ tapi.bind_alias_flag('o', 'objname');
 tapi.bind_alias_flag('I', 'include');
 tapi.bind_alias_flag('t', 'target');
 tapi.bind_alias_flag('m', 'march');
+tapi.bind_alias_flag('S', 'sync');
 tapi.bind_alias_flag('q', 'quiet');
 
 // tapi.bind_alias_flag('hwm-units', 'hwm_units');
@@ -120,18 +129,21 @@ function helper() {
   journal_composer_TL3("  -t, --target            Specify the target CPU architecture (x86_64, etc) for compilation");
   journal_composer_TL3("  -m, --march             Specify the target CPU microarchitecture (x86_64, etc) for compilation");
   journal_composer_TL3('  --features              Specify CPU features for compilation');
+  journal_composer_TL3("  --use-raptor            Enable the new high-performance Raptor Engine");
+  journal_composer_TL3("  -S, --sync <resource>   Sync system resources (e.g., 'linux-headers') to local cache");
   journal_composer_TL3('  --multiboot             Enable multiboot compilation mode');
 
   journal_composer_TL3('Commands:');
   journal_composer_TL3('  --update                Update AsmX compilation platform');
   journal_composer_TL3('  --package               Create package from compiled executable');
-  journal_composer_TL3('  --multiclean            Clean artifacts created by multiboot compilation'); 
+  journal_composer_TL3('  --multiclean            Clean artifacts created by multiboot compilation');
+  journal_composer_TL3('  -S, --sync              Sync system resources (e.g., linux-headers)');
 }
 
 function help_begin_block(_print_title = true) {
   _print_title && Server.journal.log('Options:');
   Server.journal.log('  -h, --help              Display this information');
-  Server.journal.log('  --help={common|llvm|package|compiler-options}');
+  Server.journal.log('  --help={common|llvm|package|compiler-options|debug}');
   Server.journal.log('                          Display specific types of command line options');
   Server.journal.log('  -v, --version           Display the version number');
   Server.journal.log('  -a, --aliases           Display the aliases of the compiler');
@@ -149,6 +161,7 @@ function help_common() {
   help_llvm(false);
   help_package(false);
   help_compiler_options(false);
+  help_debug(false);
 }
 
 function help_llvm(_print_title = true) {
@@ -179,6 +192,14 @@ function help_compiler_options(_print_title = true) {
   Server.journal.log('  --features              Specify CPU features for compilation');
   Server.journal.log('  --features-list         Get CPU features for compilation');
   Server.journal.log('  --multiboot             Enable multiboot compilation mode');
+}
+
+function help_debug(_print_title = true) {
+  _print_title && Server.journal.log('Debug & Tooling:');
+  Server.journal.log("  --ast-dump               Visualize the Raptor AST tree for the source file");
+  Server.journal.log("  --debug-only-lexer       Stream lexer tokens and states from source to console");
+  Server.journal.log("  --debug-only-lexer-repl  Start an interactive shell for real-time lexer testing");
+  Server.journal.log("  --debug-ast-dump-repl    Start an interactive shell for Raptor syntax and AST visualization");
 }
 
 function version() {
@@ -327,6 +348,31 @@ function build_multiclean() {
   }
 }
 
+function sync_resource(terminal_arguments) {
+  Server.journal.info('Starting sync resources...');
+  const resources = path.join(__dirname, './resources');
+  if (!fs.existsSync(resources)) {
+    Server.journal.error(`Resource directory not found`);
+    __asmx_procexit();
+  }
+
+  const resource = terminal_arguments?.sync;
+  if (!fs.readdirSync(resources).includes(resource)) {
+    Server.journal.error(`Unknown sync target: ${terminal_arguments.sync}`);
+    Server.journal.error(`Available resources: ${fs.readdirSync(resources).join(', ')}`);
+    __asmx_procexit();
+  }
+
+  const cacheDir = path.join(__asmx_get_cache_dir(), `sync_${resource}`);
+  if (fs.existsSync(cacheDir)) fs.rmSync(cacheDir, { recursive: true, force: true });
+  fs.cpSync(path.join(resources, resource), cacheDir, { recursive: true });
+  const spawnOptions = { cwd: cacheDir, stdio: 'inherit', shell: true };
+  spawnSync('make', [], spawnOptions);
+  spawnSync('make clean', [], spawnOptions);
+  fs.rmSync(cacheDir, { recursive: true, force: true });
+  Server.journal.success(`Synced: ${resource}`);
+}
+
 function insufficient_arguments(arg_default, insufficient_arguments_cb) {
   if (arg_default == INTERNAL_OBJVARS.INTERNAL_SIG_INSUFFICIENT_ARGS) {
     Server.journal.error('Insufficient arguments');
@@ -457,7 +503,20 @@ function __asmx_handler_signals_fn() {
     __asmx_kernel_panic_fn(`Process terminated by signal: ${signal}`);
   };
 
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));   // hotkeys: Ctrl + C
+  // hotkeys: Ctrl + C
+  process.on('SIGINT', () => {
+    const terminal_arguments = tapi.parse(...INTERNAL_ARGV);
+    __asmx_prepare_pipeline_factory_fn(terminal_arguments);
+    __asmx_settngs_pipeline_factory_fn(terminal_arguments);
+
+    if (terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_DEBUG_ONLY_LEXER_REPL] || 
+        terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_DEBUG_ONLY_LEXER] ||
+        terminal_arguments[INTERNAL_OBJVARS.TTY_NFG_DEBUG_AST_DUMP_REPL]) {
+      process.exit();
+    }
+
+    gracefulShutdown('SIGINT');
+  });
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM')); // kill
   process.on('SIGSEGV', () => gracefulShutdown('SIGSEGV')); // kill -11
 }
@@ -749,6 +808,9 @@ function __asmx_inizialize_fn() {
   INTERNAL_OBJVARS.TTY_NFG_SPECIFY_GET_FEATURES_CPU = toProp('features-list');
   INTERNAL_OBJVARS.TTY_NFG_EXPORT_JSON_ISA = toProp('export-json-isa');
   INTERNAL_OBJVARS.TTY_NFG_QUIET = 'quiet';
+  INTERNAL_OBJVARS.TTY_NFG_DEBUG_ONLY_LEXER = toProp('debug-only-lexer');
+  INTERNAL_OBJVARS.TTY_NFG_DEBUG_ONLY_LEXER_REPL = toProp('debug-only-lexer-repl');
+  INTERNAL_OBJVARS.TTY_NFG_DEBUG_AST_DUMP_REPL = toProp('debug-ast-dump-repl');
   INTERNAL_OBJVARS.TTY_NFG_VERBOSE_COMMON = toProp('verbose-common');
   INTERNAL_OBJVARS.TTY_NFG_VERBOSE_HWC = toProp('verbose-hwc');
   INTERNAL_OBJVARS.TTY_NFG_VERBOSE_DRIVER = toProp('verbose-driver');

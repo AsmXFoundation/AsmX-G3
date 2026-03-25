@@ -9,17 +9,17 @@ const SyntaxScannerBaseConstructor = require('./scanner-base.js');
 class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
   static scanImportInstruction(token, ast) {
     function baseCheck(token, ast) {
-      if (ast[1] == undefined || ast[1].type != TypeOfAtomicExpression.IDENTIFER) {
+      if (ast[1] == undefined || ast[1].type != TypeOfAtomicExpression.IDENTIFIER) {
         if (ast[1] == undefined) {
           this.exceptDefaultTracewayException(token, 'Expected "as" keyword');
         }
 
-        if (ast[1].body.identifer.lexem != 'as') {
+        if (ast[1].body.identifier.lexem != 'as') {
           this.exceptDefaultTracewayException(token, 'Expected "as" keyword after string literal or expression');
         }
       }
 
-      if (ast[2] == undefined || ast[2].type != TypeOfAtomicExpression.IDENTIFER) {
+      if (ast[2] == undefined || ast[2].type != TypeOfAtomicExpression.IDENTIFIER) {
         this.exceptDefaultTracewayException(token, 'Expected only one identifier after "as"');
       }
 
@@ -30,7 +30,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
 
     this.checkEmptyInstruction(token, ast, 'Module');
 
-    if ([TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.MEMBER].some(type => ast[0].type == type)) {
+    if ([TypeOfAtomicExpression.IDENTIFIER, TypeOfAtomicExpression.MEMBER].some(type => ast[0].type == type)) {
       if (ast[1] != undefined) {
         baseCheck.call(this, token, ast);
       } else if (ast.length > 1) {
@@ -94,7 +94,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
         this.exceptDefaultTracewayException(possibleTerms[0], 'Expected name before parenthesis');
       } else {
         if (TypeOfInstructionExpression.extractNameOfInstruction(token) == 'function') {
-          if (ast[0].body.caller.type != TypeOfAtomicExpression.IDENTIFER) {
+          if (ast[0].body.caller.type != TypeOfAtomicExpression.IDENTIFIER) {
             let exceptToken = possibleTerms[0];
 
             if (!(ast[0].body.caller instanceof Expression)) {
@@ -168,7 +168,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
         this.exceptDefaultTracewayException(token, 'Call instruction cannot have more than one argument');
       }
 
-      if ([nodes[0].type == TypeOfAtomicExpression.CALL, nodes[0].type == TypeOfAtomicExpression.IDENTIFER].every(_ => _ == false)) {
+      if ([nodes[0].type == TypeOfAtomicExpression.CALL, nodes[0].type == TypeOfAtomicExpression.IDENTIFIER].every(_ => _ == false)) {
         this.exceptDefaultTracewayException(token, 'Invalid call instruction');
       }
     }
@@ -211,7 +211,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
       this.exceptDefaultTracewayException(token, 'Number or boolean literal cannot be followed by member expression');
     }
 
-    if (nextToken.type == TypeOfToken.IDENTIFER && TypeOfToken.isBoolean(nextToken)) {
+    if (nextToken.type == TypeOfToken.IDENTIFIER && TypeOfToken.isBoolean(nextToken)) {
       this.exceptDefaultTracewayException(token, 'Boolean literal cannot be followed by member expression');
     }
   }
@@ -265,7 +265,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
       this.exceptDefaultTracewayException(token, 'include instruction must have one argument');
     }
 
-    if (![TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.MEMBER, TypeOfAtomicExpression.CALL].includes(ast[0].type)) {
+    if (![TypeOfAtomicExpression.IDENTIFIER, TypeOfAtomicExpression.MEMBER, TypeOfAtomicExpression.CALL].includes(ast[0].type)) {
       this.exceptDefaultTracewayException(token, 'include instruction must have one expression');
     }
 
@@ -293,7 +293,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
       this.exceptDefaultTracewayException(token, 'section instruction must have syntax; @section { ... }');
     }
 
-    const section_token = ast_node.body.inizializer.body.identifer;
+    const section_token = ast_node.body.inizializer.body.identifier;
     const section_t = section_token.lexem;
 
     if (["data", "rodata", "bss", "modinfo"].includes(section_t)) {
@@ -316,7 +316,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
       const name_t = node.body.property.type;
       const value_t = node.body.value.type;
       
-      if (![TypeOfAtomicExpression.IDENTIFER].includes(name_t)) {
+      if (![TypeOfAtomicExpression.IDENTIFIER].includes(name_t)) {
         this.exceptDefaultTracewayException(token, 'Property name must be an identifier');
       }
 
@@ -325,9 +325,9 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
       }
 
       const type_t = node.body.value.body.caller.type;
-      const name_token = node.body.property.body.identifer;
+      const name_token = node.body.property.body.identifier;
 
-      if (type_t != TypeOfAtomicExpression.IDENTIFER) {
+      if (type_t != TypeOfAtomicExpression.IDENTIFIER) {
         this.exceptDefaultTracewayException(name_token, 'Type of property must be an identifier');
       }
     });
@@ -356,7 +356,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
     }
 
     const ast_node = ast[0];
-    if (![TypeOfAtomicExpression.IDENTIFER, TypeOfAtomicExpression.CALL, TypeOfAtomicExpression.PARENTHESIS, TypeOfAtomicExpression.MEMBER].includes(ast_node.type)) {
+    if (![TypeOfAtomicExpression.IDENTIFIER, TypeOfAtomicExpression.CALL, TypeOfAtomicExpression.PARENTHESIS, TypeOfAtomicExpression.MEMBER].includes(ast_node.type)) {
       this.exceptDefaultTracewayException(token, 'call instruction must have syntax; @call name( ... )?');
     }
   }
@@ -395,7 +395,7 @@ class SyntaxScannerExpression extends SyntaxScannerBaseConstructor {
   }
 
   static zcc_scan_fn_name(token, ast) {
-    if (![TypeOfAtomicExpression.IDENTIFER].includes(ast[0].body.caller.type)) {
+    if (![TypeOfAtomicExpression.IDENTIFIER].includes(ast[0].body.caller.type)) {
       this.exceptDefaultTracewayException(token, 'Name of function must be an identifier');
     }
   }

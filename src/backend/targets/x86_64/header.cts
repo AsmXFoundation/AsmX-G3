@@ -23,6 +23,15 @@ enum OperandSize {
 type Register = string; // e.g., 'rax', 'ecx', 'sp', 'r10d', 'bh', 'sil'
 
 // Represents a Memory Operand
+/**
+ * General:
+ * segment:displacement(base, index, scale) -> %fs:0x00(%rax, %rcx, 8)
+ * 
+ * (%rax) -> base(%rax)
+ *
+ * RIP-relative:
+ *  (%rip) or symbol(%rip)
+ */
 interface MemoryOperand {
   size: OperandSize;
   base?: Register;

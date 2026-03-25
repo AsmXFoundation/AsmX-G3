@@ -5,13 +5,13 @@ const MemberBaseConstructor = require("./member-base.js");
 
 class Branchmember extends MemberBaseConstructor {
   static __label__expr__(expression) {
-    if (expression.body.name.type != TypeOfAtomicExpression.IDENTIFER) {
-      SyntaxScannerExpression.exceptDefaultTracewayException(expression.body.id, 'Expected identifer');
+    if (expression.body.name.type != TypeOfAtomicExpression.IDENTIFIER) {
+      SyntaxScannerExpression.exceptDefaultTracewayException(expression.body.id, 'Expected identifier');
     }
 
     delete expression.body.id;
     const environment = new Enviroment();
-    environment.setLabel(expression.body.name.body.identifer.lexem, expression.body);
+    environment.setLabel(expression.body.name.body.identifier.lexem, expression.body);
   }
 
   static __goto__expr__(expression) {
@@ -19,12 +19,12 @@ class Branchmember extends MemberBaseConstructor {
       SyntaxScannerExpression.exceptDefaultTracewayException(expression.body.id, 'Expected 1 argument');
     }
 
-    if (expression.body.ast[0].type != TypeOfAtomicExpression.IDENTIFER) {
-      SyntaxScannerExpression.exceptDefaultTracewayException(expression.body.id, 'Expected identifer');
+    if (expression.body.ast[0].type != TypeOfAtomicExpression.IDENTIFIER) {
+      SyntaxScannerExpression.exceptDefaultTracewayException(expression.body.id, 'Expected identifier');
     }
 
     const environment = new Enviroment();
-    const label = expression.body.ast[0].body.identifer.lexem;
+    const label = expression.body.ast[0].body.identifier.lexem;
     const labelToGo = environment.getLabel(label);
 
     if (labelToGo == undefined) {

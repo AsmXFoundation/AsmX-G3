@@ -203,9 +203,9 @@ class VerboseJournalService {
     }
   }
 
-  traceback(traceback_lvl, message) {
+  traceback(traceback_lvl, message, blink = true) {
     if (traceback_lvl <= this.traceback_lvl && this.shouldShow()) {
-      console.log(`${Color.FG_BLINK_BRIGHT_ORANGE}${this.mark}: ${message}\x1b[0m`);
+      console.log(`${blink ? Color.FG_BLINK_BRIGHT_ORANGE : `${Color.BRIGHT}${Color.FG_CYAN}`}${this.mark}: ${message}\x1b[0m`);
     }
   }
 }

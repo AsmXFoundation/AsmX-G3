@@ -11,7 +11,7 @@ class SyntaxScannerItem extends SyntaxScannerBaseConstructor {
       this.exceptDefaultTracewayException(openPair, 'Signature block cannot have more than three expressions');
     }
 
-    if (nodes.last().type != TypeOfAtomicExpression.IDENTIFER) {
+    if (nodes.at(-1).type != TypeOfAtomicExpression.IDENTIFIER) {
       this.exceptDefaultTracewayException(openPair, 'Signature block must start with an identifier before comma');
     }
 
