@@ -370,7 +370,9 @@ class AssemblyInstructionDescriptorTable {
                 // 63 /r: MOVSXD r32, r/m32
                 {
                     opcode: [0x63],
-                    operationSizeMode: 'ExplicitDword',
+                    // operationSizeMode: 'ExplicitDword',
+                    operationSizeMode: "FromFirstRegMem",
+                    requiresMatchingRegMemSizes: true,
                     operands: [
                         { type: header_cjs_1.OperandType.Reg, size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
                         { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
@@ -379,7 +381,10 @@ class AssemblyInstructionDescriptorTable {
                 // 63 /r: MOVSXD r64, r/m32 (REX.W)
                 {
                     opcode: [0x63],
-                    operationSizeMode: 'ExplicitQword',
+                    // operationSizeMode: 'ExplicitQword',
+                    operationSizeMode: "FromFirstRegMem",
+                    requiresMatchingRegMemSizes: false,
+                    requiresRexW: true,
                     operands: [
                         { type: header_cjs_1.OperandType.Reg, size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
                         { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
@@ -388,6 +393,58 @@ class AssemblyInstructionDescriptorTable {
             ]
         };
         this.instructionSet.set('movsxd', movsxdDef);
+        const movsxDef = {
+            mnemonic: 'movsx',
+            variants: [
+                // 0F BE /r: MOVSX r16/32/64, r/m8
+                {
+                    opcode: [0x0F, 0xBE],
+                    operationSizeMode: 'FromFirstRegMem', // Size is determined by destination register
+                    requiresMatchingRegMemSizes: false,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // 0F BF /r: MOVSX r16/32/64, r/m16
+                {
+                    opcode: [0x0F, 0xBF],
+                    operationSizeMode: 'FromFirstRegMem',
+                    requiresMatchingRegMemSizes: false,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('movsx', movsxDef);
+        const movzxDef = {
+            mnemonic: 'movzx',
+            variants: [
+                // 0F B6 /r: MOVZX r16/32/64, r/m8
+                {
+                    opcode: [0x0F, 0xB6],
+                    operationSizeMode: 'FromFirstRegMem',
+                    requiresMatchingRegMemSizes: false,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // 0F B7 /r: MOVZX r16/32/64, r/m16
+                {
+                    opcode: [0x0F, 0xB7],
+                    operationSizeMode: 'FromFirstRegMem',
+                    requiresMatchingRegMemSizes: false,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('movzx', movzxDef);
         const pushDef = {
             mnemonic: 'push',
             variants: [
@@ -446,6 +503,47 @@ class AssemblyInstructionDescriptorTable {
             ]
         };
         this.instructionSet.set('push', pushDef);
+        const popDef = {
+            mnemonic: 'pop',
+            variants: [
+                // 58+r: POP r64/16 (Long Mode: Defaults to 64-bit. 16-bit needs 66H)
+                {
+                    opcode: [0x58],
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.OpcodeReg }
+                    ],
+                    operationSizeMode: 'FromFirstRegMem',
+                },
+                // 8F /0: POP r/m64/16/32
+                {
+                    opcode: [0x8F],
+                    modrmRegExtension: 0,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ],
+                    operationSizeMode: 'FromFirstRegMem'
+                },
+                // 0F A1: POP FS
+                {
+                    opcode: [0x0F, 0xA1],
+                    operands: [
+                        { type: header_cjs_1.OperandType.Sreg, encoding: header_cjs_1.OperandEncoding.Implicit, isImplicit: true, implicitReg: 'fs' }
+                    ],
+                    operationSizeMode: 'ExplicitDword',
+                    disallowsRex: true
+                },
+                // 0F A9: POP GS
+                {
+                    opcode: [0x0F, 0xA9],
+                    operands: [
+                        { type: header_cjs_1.OperandType.Sreg, encoding: header_cjs_1.OperandEncoding.Implicit, isImplicit: true, implicitReg: 'gs' }
+                    ],
+                    operationSizeMode: 'ExplicitDword',
+                    disallowsRex: true
+                }
+            ]
+        };
+        this.instructionSet.set('pop', popDef);
         const arithmetic_instructions = [
             {
                 mnemonic: 'inc',
@@ -510,6 +608,266 @@ class AssemblyInstructionDescriptorTable {
                 ]
             }
         ];
+        const negDef = {
+            mnemonic: 'neg',
+            variants: [
+                // F6 /3: NEG r/m8
+                {
+                    opcode: [0xF6],
+                    modrmRegExtension: 3,
+                    operationSizeMode: 'ExplicitByte',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /3: NEG r/m16
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 3,
+                    operationSizeMode: 'ExplicitWord',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /3: NEG r/m32
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 3,
+                    operationSizeMode: 'ExplicitDword',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /3: NEG r/m64 (REX.W required)
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 3,
+                    operationSizeMode: 'ExplicitQword',
+                    requiresRexW: true,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('neg', negDef);
+        const mulDef = {
+            mnemonic: 'mul',
+            variants: [
+                // F6 /4: MUL r/m8 (AX = AL * r/m8)
+                {
+                    opcode: [0xF6],
+                    modrmRegExtension: 4,
+                    operationSizeMode: 'ExplicitByte',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /4: MUL r/m16
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 4,
+                    operationSizeMode: 'ExplicitWord',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /4: MUL r/m32
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 4,
+                    operationSizeMode: 'ExplicitDword',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /4: MUL r/m64 (REX.W)
+                {
+                    opcode: [0xF7],
+                    modrmRegExtension: 4,
+                    operationSizeMode: 'ExplicitQword',
+                    requiresRexW: true,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('mul', mulDef);
+        const imulDef = {
+            mnemonic: 'imul',
+            variants: [
+                // F6 /5: IMUL r/m8 (AX = AL * r/m8)
+                { opcode: [0xF6],
+                    modrmRegExtension: 5,
+                    operationSizeMode: 'ExplicitByte',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /5: MUL r/m16
+                { opcode: [0xF7],
+                    modrmRegExtension: 5,
+                    operationSizeMode: 'ExplicitWord',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /5: MUL r/m32
+                { opcode: [0xF7],
+                    modrmRegExtension: 5,
+                    operationSizeMode: 'ExplicitDword',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /5: MUL r/m64
+                { opcode: [0xF7],
+                    modrmRegExtension: 5,
+                    operationSizeMode: 'ExplicitQword',
+                    requiresRexW: true,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // 0F AF /r IMUL: IMUL r16/32/64, r/m16/32/64
+                {
+                    opcode: [0x0F, 0xAF],
+                    requiresMatchingRegMemSizes: true,
+                    operationSizeMode: 'FromFirstRegMem',
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // 3-operand IMUL: IMUL r, r/m, imm8
+                {
+                    opcode: [0x6B],
+                    operationSizeMode: 'FromFirstRegMem',
+                    immediateType: 'SignExtendedByte',
+                    fixedImmediateSize: header_cjs_1.OperandSize.Byte,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: [header_cjs_1.OperandSize.Word, header_cjs_1.OperandSize.Dword, header_cjs_1.OperandSize.Qword], encoding: header_cjs_1.OperandEncoding.ModRM_RM },
+                        { type: header_cjs_1.OperandType.Imm, size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.Immediate }
+                    ]
+                },
+                // 3-operand IMUL: IMUL r, r/m, imm16/32
+                {
+                    opcode: [0x69],
+                    operationSizeMode: 'ExplicitWord',
+                    immediateType: 'FixedSize',
+                    fixedImmediateSize: header_cjs_1.OperandSize.Word,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM },
+                        { type: header_cjs_1.OperandType.Imm, size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.Immediate }
+                    ]
+                },
+                {
+                    opcode: [0x69],
+                    operationSizeMode: 'ExplicitDword',
+                    immediateType: 'FixedSize',
+                    fixedImmediateSize: header_cjs_1.OperandSize.Dword,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM },
+                        { type: header_cjs_1.OperandType.Imm, size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.Immediate }
+                    ]
+                },
+                {
+                    opcode: [0x69],
+                    operationSizeMode: 'ExplicitQword',
+                    immediateType: 'FixedSize',
+                    fixedImmediateSize: header_cjs_1.OperandSize.Dword,
+                    requiresRexW: true,
+                    operands: [
+                        { type: header_cjs_1.OperandType.Reg, size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_Reg },
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM },
+                        { type: header_cjs_1.OperandType.Imm, size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.Immediate }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('imul', imulDef);
+        const divDef = {
+            mnemonic: 'div',
+            variants: [
+                // F6 /6: DIV r/m8
+                { opcode: [0xF6],
+                    modrmRegExtension: 6,
+                    operationSizeMode: 'ExplicitByte',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /6: DIV r/m16
+                { opcode: [0xF7],
+                    modrmRegExtension: 6,
+                    operationSizeMode: 'ExplicitWord',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /6: DIV r/m32
+                { opcode: [0xF7],
+                    modrmRegExtension: 6,
+                    operationSizeMode: 'ExplicitDword',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /6: DIV r/m64 (REX.W)
+                { opcode: [0xF7],
+                    modrmRegExtension: 6,
+                    operationSizeMode: 'ExplicitQword',
+                    requiresRexW: true,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('div', divDef);
+        const idivDef = {
+            mnemonic: 'idiv',
+            variants: [
+                // F6 /7: IDIV r/m8
+                { opcode: [0xF6],
+                    modrmRegExtension: 7,
+                    operationSizeMode: 'ExplicitByte',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Byte, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /7: IDIV r/m16
+                { opcode: [0xF7],
+                    modrmRegExtension: 7,
+                    operationSizeMode: 'ExplicitWord',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Word, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /7: IDIV r/m32
+                { opcode: [0xF7],
+                    modrmRegExtension: 7,
+                    operationSizeMode: 'ExplicitDword',
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Dword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                },
+                // F7 /7: IDIV r/m64 (REX.W)
+                { opcode: [0xF7],
+                    modrmRegExtension: 7,
+                    operationSizeMode: 'ExplicitQword',
+                    requiresRexW: true,
+                    operands: [
+                        { type: [header_cjs_1.OperandType.Reg, header_cjs_1.OperandType.Mem], size: header_cjs_1.OperandSize.Qword, encoding: header_cjs_1.OperandEncoding.ModRM_RM }
+                    ]
+                }
+            ]
+        };
+        this.instructionSet.set('idiv', idivDef);
         for (const instruction_define of arithmetic_instructions) {
             this.instructionSet.set(instruction_define.mnemonic, instruction_define);
         }

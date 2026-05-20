@@ -49,8 +49,15 @@ enum Token {
   OPERATOR_OR, // ||
   ELLIPSIS, // ...
   ARROW, // ->
+  PATTERN_CASE, // =>
   SCOPE,  // ::
   EOF,
+}
+
+class TokenOf {
+  static is(t: StructToken, k: Token) {
+    return t.type == k;
+  }
 }
 
 enum ReserveIdentifier {
@@ -58,6 +65,7 @@ enum ReserveIdentifier {
   RID_CONST = "const",
   RID_EXTERN = "extern",
   RID_TYPEDEF = "typedef",
+  RID_SIZEOF = "sizeof",
   RID_INLINE = "inline",
   RID_VOLATILE = "volatile",
   RID_AUTO = "auto",
@@ -78,11 +86,13 @@ enum ReserveIdentifier {
   RID_MUTABLE = "mutable",
   RID_STRUCT = "struct",
   RID_ENUM = "enum",
-  RID_PUBLIC = "public",
-  RID_PRIVATE = "private",
+  RID_INSPECT = "inspect",
+  RID_PUBLIC = "pub",
+  RID_PRIVATE = "priv",
   RID_PROTECTED = "protected",
   RID_TEMPLATE = "template",
   RID_NAMESPACE = "namespace",
+  RID_UNION = "union",
   RID_OPERATOR = "operator",
   RID_THIS = "this",
   RID_THROW = "except", // (C++ throw) except
@@ -91,6 +101,9 @@ enum ReserveIdentifier {
   RID_TYPENAME = "typename",
   RID_TYPEID = "typeid",
   RID_USING = "using",
+  RID_WHILE = "while",
+  RID_BREAK = "break",
+  RID_CONTINUE = "continue",
   /* casts */
   RID_CONSTCAST = "const_cast",
   RID_DYNAMICCAST = "dynamic_cast",
@@ -210,5 +223,5 @@ class TokenStream {
 }
 
 export {
-  Token, StructToken, TokenStream, ReserveIdentifier, ReserveIdentifierCoder, normalizeToken
+  Token, StructToken, TokenStream, ReserveIdentifier, ReserveIdentifierCoder, normalizeToken, TokenOf
 }

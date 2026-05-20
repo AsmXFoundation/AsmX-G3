@@ -859,6 +859,22 @@ abstract class DynamicLinkerStrategy implements LinkerStrategy {
           //   throw new Error(`PC32 unexpected for non-local symbol ${reloc.symbolName}`);
           // }
 
+          // If the symbol is external (dynamicSymbols without sectionName)
+          // but has a PLT entry — fall back to the PLT32 calculation instead of throwing an exception.
+          // if (!isLocal && !symbolInfo.sectionName) {
+          //   if (pltSection && symbolInfo.pltOffset !== undefined) {
+          //     targetAddr = BigInt(pltSection.sh_addr + symbolInfo.pltOffset);
+          //     value = Number(targetAddr - (patchAddr + BigInt(4)) + addend);
+          //     HardwareCompilerJournal.warn(2,
+          //       `  PC32→PLT32 fallback for ${reloc.symbolName}: PLT=0x${targetAddr.toString(16)}, ` +
+          //       `PatchAddr=0x${patchAddr.toString(16)}, Value=0x${(value >>> 0).toString(16)}`);
+          //     textBuffer.writeInt32LE(value, patchOffset);
+          //     break;
+          //   }
+          //   throw new Error(`PC32 unexpected for external symbol ${reloc.symbolName} (no PLT entry)`);
+          // }
+
+          // v0
           if (!isLocal && !symbolInfo.sectionName) {
             throw new Error(`PC32 unexpected for external symbol ${reloc.symbolName}`);
           }

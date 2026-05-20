@@ -1,4 +1,4 @@
-;; asmx ./examples/g4/simple_driver --release --target amd64 -o fireware-v2.ko --features all --emergency-panic --verbose-hwc 10 --use-raptor
+// asmx ./examples/g4/simple_driver --release --target amd64 -o fireware-v2.ko --features all --emergency-panic --verbose-hwc 10 --use-raptor
 
 @section data {
   init_msg:       const_cast<const char*>("The init module started.");
@@ -15,11 +15,11 @@
   vermagic:   const_cast<const char*>("6.17.9-arch-1");
 }
 
-;;fn fw_probe(char* dev) {
-;;  @lea &msg_probe, %rdi;
-;;  @call _printk;
-;;  @mov $00, %rax;
-;;}
+//fn fw_probe(char* dev) {
+//  @lea &msg_probe, %rdi;
+//  @call _printk;
+//  @mov $00, %rax;
+//}
 
 __init fn fireware_init {
   @lea &init_msg, %rdi

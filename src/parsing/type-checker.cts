@@ -1,22 +1,27 @@
 import { Syntax } from "../types/expression.cjs";
+import { ReserveIdentifier } from "../types/token.cjs";
 import { UnwrapSyntax } from "../types/unwrap.cjs";
 import { MangleService } from "./mangle.cjs";
-import { ConstValue, StorageClass } from "./type_resolver.cjs";
+import { ConstValue, StorageClass, TypeResolver } from "./type_resolver.cjs";
 
 const exceptions = require("llvm.js/exceptions");
 
 export namespace TypeSystem {
   export enum TypeKind {
     Unresolved = 10,
-    Primitive,   // u8, i32, f64
-    Alias,       // typedef u16 ...
-    Pointer,     // int*
-    Reference,   // int&, int&&
-    Array,       // int[10]
-    Function,    // (int, int) -> void
-    Template,    // std::vector<T> (Еще не тип, а фабрика типов!)
-    Instantiated,// std::vector<int> (Уже конкретный тип)
-    VariadicPack // T...
+    Primitive,    // u8, i32, f64
+    Alias,        // typedef u16 ...
+    Pointer,      // int*
+    Reference,    // int&, int&&
+    Array,        // int[10]
+    Function,     // (int, int) -> void
+    Template,     // std::vector<T> (Not just a type—a type factory!)
+    Instantiated, // std::vector<int> (Now that's a specific type.)
+    VariadicPack, // T...
+    Struct,       // struct Foo { int x; }
+    Enum,         // enum Foo { A, B }
+    Union,        // union Foo { int x; }
+    OverloadSet,  // overload set for function overloading
   }
 
   export enum ValueCategory {
@@ -31,10 +36,10 @@ export namespace TypeSystem {
     volatile: boolean;  // true if the type has a volatile-qualifier
   }
 
-  export const NO_CV:CVQualifier = {const: false, volatile: false};
-  export const CONST_CV:CVQualifier = {const: true, volatile: false};
-  export const VOLATILE_CV:CVQualifier = {const: false, volatile: true};
-  export const CONST_VOLALITE_CV:CVQualifier = {const: true, volatile: true};
+  export const NO_CV: CVQualifier = { const: false, volatile: false };
+  export const CONST_CV: CVQualifier = { const: true, volatile: false };
+  export const VOLATILE_CV: CVQualifier = { const: false, volatile: true };
+  export const CONST_VOLALITE_CV: CVQualifier = { const: true, volatile: true };
 
   //   const int* p   => QualType(Pointer, cv=NO_CV),   points_to = QualType(int, cv=CONST_CV)
   //   int* const p   => QualType(Pointer, cv=CONST_CV), points_to = QualType(int, cv=NO_CV)
@@ -45,17 +50,17 @@ export namespace TypeSystem {
       public cv: CVQualifier = NO_CV
     ) {};
 
-    get is_const(): boolean     {return this.cv.const;}
-    get is_volatile(): boolean  {return this.cv.volatile;}
+    get is_const():    boolean { return this.cv.const; }
+    get is_volatile(): boolean { return this.cv.volatile; }
 
     with_const(value: boolean = true): QualType {
       return new QualType(this.kind, this.type, { ...this.cv, const: value });
     }
-    
+
     with_volatile(value: boolean = true): QualType {
       return new QualType(this.kind, this.type, { ...this.cv, volatile: value });
     }
-    
+
     resolve(): QualType {
       if (this.kind === TypeKind.Alias && this.type instanceof AliasType) {
         const inner: QualType = this.type.resolve_qualtype();
@@ -69,7 +74,7 @@ export namespace TypeSystem {
 
     toString(): string {
       const outer_cv =
-        (this.cv.const    ? " const"    : "") +
+        (this.cv.const ? " const" : "") +
         (this.cv.volatile ? " volatile" : "");
 
       if (this.type instanceof PointerType) {
@@ -92,7 +97,7 @@ export namespace TypeSystem {
 
       // PrimitiveType, AliasType, FunctionAnyType — cv перед именем
       const inner_cv =
-        (this.cv.const    ? "const "    : "") +
+        (this.cv.const ? "const " : "") +
         (this.cv.volatile ? "volatile " : "");
 
       return `${inner_cv}${this.type.name}`;
@@ -127,14 +132,15 @@ export namespace TypeSystem {
         if (src_cv.const && !dst_cv.const) return false; // disallow dropping const
         // any arithmetic type → bool (integral-to-bool, C++ [conv.bool])
         if (resolved.name === PrimitiveTypeEnumeration.BOOL) return true;
-        return this.sizeBytes <= resolved.sizeBytes;
+        // return this.sizeBytes <= resolved.sizeBytes;
+        return true; // narrowing conversion is always safe
       }
 
       return false;
     }
 
-    resolve(): AnyType  { return this;}
-    size(): number      { return this.sizeBytes; }
+    resolve(): AnyType { return this; }
+    size(): number { return this.sizeBytes; }
   }
 
   //   typedef const volatile char cv_char_t;
@@ -288,8 +294,79 @@ export namespace TypeSystem {
       return true;
     }
 
-    resolve(): AnyType  {return this;}
-    size(): number      {return 0;}
+    resolve(): AnyType { return this; }
+    size(): number { return 0; }
+  }
+
+  export class StructType extends AnyType {
+    public fields: Map<string, { type: QualType; offset: number; size: number; access: string; }> = new Map();
+    public totalSize: number = 0;
+    public alignment: number = 1;
+
+    public methods: Map<string, Array<{
+      fnType: TypeSystem.FunctionAnyType;
+      node: Syntax.Node<any>;
+      isConstructor: boolean;
+      isDestructor: boolean;
+      access: ReserveIdentifier.RID_PUBLIC | ReserveIdentifier.RID_PRIVATE | ReserveIdentifier.RID_PROTECTED;
+      mangledName: string;
+    }>> = new Map();
+
+    constructor(name: string) {
+      super(TypeKind.Struct, name);
+    }
+
+    is_assignable_to(other: AnyType, src_cv: CVQualifier, dst_cv: CVQualifier): boolean {
+      const resolved = other.resolve();
+      return resolved instanceof StructType && resolved.name === this.name;
+    }
+
+    resolve(): AnyType { return this; }
+    size(): number { return this.totalSize; }
+  }
+
+  export class EnumType extends AnyType {
+    public members: Map<string, number> = new Map();
+    constructor(name: string) {
+      super(TypeKind.Enum, name);
+    }
+
+    is_assignable_to(other: AnyType, src_cv: CVQualifier, dst_cv: CVQualifier): boolean {
+      const resolved = other.resolve();
+      return resolved instanceof EnumType && resolved.name === this.name;
+    }
+
+    resolve(): AnyType { return this; }
+    size(): number { return 4; }
+  }
+
+  export class TaggedUnionType extends AnyType {
+    public variants: Map<string, { tag: number, payloadTypes: QualType[] }> = new Map();
+    public maxSize: number = 0;
+
+    constructor(name: string) {
+      super(TypeKind.Union, name);
+    }
+
+    is_assignable_to(other: AnyType, src_cv: CVQualifier, dst_cv: CVQualifier): boolean {
+      const resolved = other.resolve();
+      return resolved instanceof TaggedUnionType && resolved.name === this.name;
+    }
+
+    resolve(): AnyType { return this; }
+
+    size(): number { 
+      // 4 bytes for tag + max payload. And we align everything to 8 bytes.
+      const total = this.maxSize + 4;
+      return Math.ceil(total / 8) * 8;
+    }
+  }
+
+  export class OverloadSetType extends AnyType {
+    constructor(public overloads: any[]) { super(TypeKind.OverloadSet, "<overload-set>"); }
+    is_assignable_to(): boolean { return false; }
+    resolve(): AnyType { return this; }
+    size(): number { return 0; }
   }
 
   export enum PrimitiveTypeEnumeration {
@@ -303,15 +380,32 @@ export namespace TypeSystem {
 
   export class TypeTable {
     private types: Map<string, AnyType> = new Map();
+    private static instance: TypeTable;
+    public _currentStruct: string | null = null;
 
-    constructor() {
+    private constructor() {
       this.register(new PrimitiveType(PrimitiveTypeEnumeration.VOID, 1, false));
-      this.register(new PrimitiveType(PrimitiveTypeEnumeration.CHAR, 1, false));
+      this.register(new PrimitiveType(PrimitiveTypeEnumeration.CHAR, 1, true));
       this.register(new PrimitiveType(PrimitiveTypeEnumeration.BOOL, 1, false));
       this.register(new PrimitiveType(PrimitiveTypeEnumeration.INT16, 2, true));
       this.register(new PrimitiveType(PrimitiveTypeEnumeration.INT32, 4, true));
       this.register(new PrimitiveType(PrimitiveTypeEnumeration.NULLPTR, 8, false));
     };
+
+    public static getInstance(): TypeTable {
+      if (!TypeTable.instance) {
+        TypeTable.instance = new TypeTable();
+      }
+      return TypeTable.instance;
+    }
+
+    public pushStructContext(name: string): void {
+      this._currentStruct = name;
+    }
+
+    public popStructContext(): void {
+      this._currentStruct = null;
+    }
 
     public register(type: AnyType): void {
       this.types.set(type.name, type);
@@ -345,7 +439,76 @@ export namespace TypeSystem {
   export class TypeChecker {
     constructor(public typeTable: TypeTable) {};
 
-    check_assignment(lhs: QualType, rhs: QualType): {ok: boolean; reason?: string; conversion?: QualType} {
+    findConstructor(structType: StructType, argTypes: TypeSystem.QualType[], typeTable?: TypeSystem.TypeTable): { fnType: FunctionAnyType; node: Syntax.Node<any> } | null {
+      const candidates = Array.from(structType.methods.values()).flat().filter(m => m.isConstructor);
+      if (candidates.length === 0) return null;
+
+      // 1. Exact match (skip implicit 'this' at index 0)
+      for (const cand of candidates) {
+        const userParamCount = argTypes.length;
+        const fnParamCount = cand.fnType.parameters.length - 1; // -1 for 'this'
+        if (userParamCount !== fnParamCount) continue;
+
+        let match = true;
+        for (let i = 0; i < userParamCount; i++) {
+          const s = argTypes[i].resolve();
+          const d = cand.fnType.parameters[i + 1].resolve(); // +1 for skip 'this'
+          if (s.type.name !== d.type.name || s.cv.const !== d.cv.const) {
+            match = false; break;
+          }
+        }
+        if (match) return { fnType: cand.fnType, node: cand.node };
+      }
+
+      // 2. With implicit conversions
+      for (const cand of candidates) {
+        const userParamCount = argTypes.length;
+        const fnParamCount = cand.fnType.parameters.length - 1;
+        if (userParamCount !== fnParamCount) continue;
+
+        let match = true;
+        for (let i = 0; i < userParamCount; i++) {
+          const result = this.check_initialization(cand.fnType.parameters[i + 1], argTypes[i], typeTable);
+          if (!result.ok) { match = false; break; }
+        }
+        if (match) return { fnType: cand.fnType, node: cand.node };
+      }
+      return null;
+    }
+
+    checkMemberAccess(
+      structType: StructType,
+      memberName: string,
+      context: { currentStruct?: string; isFriend?: boolean }
+    ): { ok: boolean; reason?: string } {
+      const field = structType.fields.get(memberName);
+      const methodArr = structType.methods.get(memberName);
+      const method = methodArr && methodArr.length > 0 ? methodArr[0] : undefined;
+
+      const member = field ?? method;
+      if (!member) return { ok: false, reason: `No member '${memberName}'` };
+
+      const access = member.access ?? ReserveIdentifier.RID_PUBLIC;
+
+      if (access === ReserveIdentifier.RID_PUBLIC) {
+        return { ok: true };
+      }
+
+      if (access === ReserveIdentifier.RID_PRIVATE) {
+        if (context.currentStruct === structType.name) return { ok: true };
+        return { ok: false, reason: `'${memberName}' is private in '${structType.name}'` };
+      }
+
+      if (access === ReserveIdentifier.RID_PROTECTED) {
+        // TODO: Implement support for inheritance
+        if (context.currentStruct === structType.name) return { ok: true };
+        return { ok: false, reason: `'${memberName}' is protected in '${structType.name}'` };
+      }
+
+      return { ok: true };
+    }
+
+    check_assignment(lhs: QualType, rhs: QualType): { ok: boolean; reason?: string; conversion?: QualType } {
       const inner_lhs = lhs.resolve();
       const inner_rhs = rhs.resolve();
 
@@ -363,8 +526,11 @@ export namespace TypeSystem {
 
     // check_initialization — initialization (less strict than assignment).
     // Allows const T x = expr; (lhs can be const during initialization).
-    check_initialization(lhs: QualType, rhs: QualType): { ok: boolean; reason?: string } {
-      const l = lhs.resolve();
+    check_initialization(lhs: QualType, rhs: QualType, typeTable?: TypeSystem.TypeTable): { ok: boolean; reason?: string } {
+      let l = lhs.resolve();
+      if (typeTable) {
+        l = TypeResolver.normalize_type_with_context(lhs, typeTable).resolve();
+      }
       const r = rhs.resolve();
 
       // --- Const lvalue reference binding (C++ [dcl.init.ref]) ---
@@ -395,10 +561,10 @@ export namespace TypeSystem {
       }
 
       if (r.type.is_assignable_to(l.type, r.cv, l.cv)) {
-        return {ok: true};
+        return { ok: true };
       }
-      
-      return {ok: false, reason: `cannot initialize '${l.toString()}' with '${r.toString()}'`,};
+
+      return { ok: false, reason: `cannot initialize '${l.toString()}' with '${r.toString()}'`, };
     }
 
     // check_pointer_cast — Checks compatibility when casting pointers.
@@ -407,14 +573,14 @@ export namespace TypeSystem {
       const d = dst.resolve();
 
       if (!(s.type instanceof PointerType) || !(d.type instanceof PointerType)) {
-        return {ok: false, reason: "both types must be pointers"};
+        return { ok: false, reason: "both types must be pointers" };
       }
 
       if (s.type.is_assignable_to(d.type, s.cv, d.cv)) {
-        return {ok: true};
+        return { ok: true };
       }
 
-      return {ok: false, reason: `cannot cast '${s.toString()}' to '${d.toString()}'`};
+      return { ok: false, reason: `cannot cast '${s.toString()}' to '${d.toString()}'` };
     }
 
     check_const_cast(src_qt: QualType, dst_qt: QualType): { ok: boolean; reason?: string } {
@@ -422,13 +588,13 @@ export namespace TypeSystem {
       const dst = dst_qt.resolve();
 
       if (!(src.type instanceof PointerType || src.type instanceof ReferenceType) ||
-          !(dst.type instanceof PointerType || dst.type instanceof ReferenceType)) {
+        !(dst.type instanceof PointerType || dst.type instanceof ReferenceType)) {
         return { ok: false, reason: "const_cast can only be used with pointers or references" };
       }
 
       const src_points_to = src.type instanceof PointerType ? src.type.points_to.resolve() : (src.type as ReferenceType).refers_to.resolve();
       const dst_points_to = dst.type instanceof PointerType ? dst.type.points_to.resolve() : (dst.type as ReferenceType).refers_to.resolve();
-    
+
       if (src_points_to.type.name !== dst_points_to.type.name) {
         return { ok: false, reason: `const_cast cannot convert between different underlying types ('${src_qt.toString()}' to '${dst_qt.toString()}')` };
       }
@@ -440,12 +606,12 @@ export namespace TypeSystem {
       const src = src_qt.resolve();
       const dst = dst_qt.resolve();
 
-      return {ok: true};
+      return { ok: true };
     }
 
     check_reinterpret_cast(src_qt: QualType, dst_qt: QualType): { ok: boolean; reason?: string } {
       // NOTE: The implementation will be written later, but for now we will resolve everything.
-      return {ok: true};
+      return { ok: true };
     }
 
     check_dynamic_cast(src_qt: QualType, dst_qt: QualType): { ok: boolean; reason?: string } {
@@ -475,21 +641,25 @@ export namespace SymbolTable {
     node: Syntax.Node<any>;
     storageClass?: StorageClass;
     constValue?: ConstValue;
+    usageCount?: number;
   }
 
   export class Environment {
-    private symbols: Map<string, SymbolRecord> = new Map();
+    private symbols: Map<string, SymbolRecord[]> = new Map();
 
-    constructor(public parent: Environment | null = null) {}
+    constructor(public parent: Environment | null = null) { };
 
     public define(name: string, symbol_record: SymbolRecord): void {
-      if (this.symbols.has(name)) {
+      if (!this.symbols.has(name)) this.symbols.set(name, []);
+      const arr = this.symbols.get(name)!;
+
+      if (symbol_record.kind !== SymbolKind.Function && arr.length > 0) {
         new exceptions.ExpressionException(`Symbol ${name} already defined`, UnwrapSyntax.get_start_token(symbol_record.node));
       }
-      this.symbols.set(name, symbol_record);
+      arr.push(symbol_record);
     }
 
-    public resolve(name: string): SymbolRecord | null {
+    public resolve(name: string): SymbolRecord[] | null {
       if (this.symbols.has(name))
         return this.symbols.get(name);
       if (this.parent != null)
@@ -497,7 +667,7 @@ export namespace SymbolTable {
       return null;
     }
 
-    public own_symbols(): IterableIterator<[string, SymbolRecord]> {
+    public own_symbols(): IterableIterator<[string, SymbolRecord[]]> {
       return this.symbols.entries();
     }
 

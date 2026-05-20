@@ -7,21 +7,39 @@ namespace Syntax {
     Literal,
     List,             // arguments list, type list, just multiple someone
     Generics,         // <T>, <class T>, <typename T>, etc
-    Application,      // fn, constructor, destructor
     Call,
 
     UnaryExpression,  // &x, *ptr, -5, $10, %rax
     BinaryExpression, // a + b, a % b
-
+    SubscriptExpression,
     ImplicitCastExpression,
 
     VariableDeclaration,
     FunctionDeclaration,
     ParameterDeclaration,
+    StructDeclaration,
+    NamespaceDeclaration,
+    EnumerationDeclaration,
+    UnionDeclaration,
     SectionFieldDecl,
+
+    IfStatement,
+    WhileStatement,
+    JumpStatement,  // continue label?; break label?;
+    LabelStatement,
+    ReturnStatement,
+
+    InspectStatement,
+    InspectCase,
+
+    ThisLiteral,
 
     Closure,            // [capture] <generics> (args) -> ret { body }
     Block,              // { stmt; stmt; }
+  }
+
+  export enum Partitions {
+
   }
 
   export enum Type {
@@ -31,7 +49,7 @@ namespace Syntax {
     ArrayLiteral,
     BooleanLiteral,
     NullptrLiteral,
-    NullLiteral,
+    // ThisLiteral,
     /** @type {Kind.Application} */
     Fn,
     Ctor,
@@ -111,6 +129,17 @@ namespace Syntax {
   }
 
   export const Registry = {
+    [Syntax.Kind.ThisLiteral]: class extends Factory(Kind.ThisLiteral) {
+      token: StructToken;
+      get startToken() { return this.token; }
+    },
+
+    [Kind.SubscriptExpression]: class extends Factory(Kind.SubscriptExpression) {
+      base: Node<any>;
+      index: Node<any>;
+      bracketToken: StructToken;
+    },
+
     [Kind.ImplicitCastExpression]: class extends Factory(Kind.ImplicitCastExpression) {
       castType: StructToken;
       typeid: Node<any>;
@@ -159,15 +188,12 @@ namespace Syntax {
       selector: Node<any>;
       // selector: StructToken;
       forward?: Node<any>;
+      generics: Node<Kind.Generics>;
+      _isThisAccess?: boolean = false;
     },
 
     [Kind.Literal]: class extends WithBothPrefix(Factory(Kind.Literal)) {
       value: StructToken;
-    },
-
-    [Kind.Application]: class extends WithSignature(Factory(Kind.Application)) {
-      attributes?: NodeShape<Kind.List>;
-      name: NodeShape<Kind.Identifier>;
     },
 
     [Kind.Closure]: class extends WithSignature(Factory(Kind.Closure)) {
@@ -180,7 +206,7 @@ namespace Syntax {
     },
 
     [Kind.Block]: class extends WithParenthesis(Factory(Kind.Block)) {
-      statements: NodeShape<any>[];
+      statements: Node<any>[];
     },
 
     [Kind.VariableDeclaration]: class extends Factory(Kind.VariableDeclaration) {
@@ -188,10 +214,13 @@ namespace Syntax {
       typeNode: Node<any>;
       name: Node<Kind.Identifier>;
       initializer: Node<any> | null;
+      arrayDimensions: Node<any> | null;
+      _access: string;
     },
 
     [Kind.FunctionDeclaration]: class extends Factory(Kind.FunctionDeclaration) {
       modifiers: StructToken[]; // static const
+      templateParams?: Node<Kind.Generics>;
       qualifier: StructToken;
       name: Node<Kind.Identifier>;
       parameters: Node<Kind.ParameterDeclaration>[];
@@ -210,10 +239,69 @@ namespace Syntax {
       name: Node<Kind.Identifier>;
     },
 
+    [Kind.StructDeclaration]: class extends Factory(Kind.StructDeclaration) {
+      modifiers: StructToken[];
+      templateParams?: Node<Kind.Generics>;
+      name: NodeShape<Kind.Identifier>;
+      fields: Node<Kind.VariableDeclaration>[];
+    },
+
+    [Kind.NamespaceDeclaration]: class extends Factory(Kind.NamespaceDeclaration) {
+      name: StructToken | null;
+      body: Node<Kind.Block>;
+    },
+
+    [Kind.EnumerationDeclaration]: class extends Factory(Kind.EnumerationDeclaration) {
+      modifiers: StructToken[];
+      name: StructToken;
+      members: Node<Kind.Identifier>[];
+    },
+
+    [Kind.UnionDeclaration]: class extends Factory(Kind.UnionDeclaration) {
+      modifiers: StructToken[];
+      name: StructToken;
+      variants: Node<Kind.List>;
+    },
+
+    [Kind.InspectStatement]: class extends Factory(Kind.InspectStatement) {
+      target: Node<any>;
+      cases: Node<Kind.InspectCase>[];
+    },
+
+    [Kind.InspectCase]: class extends Factory(Kind.InspectCase) {
+      pattern: Node<any>; // Call (Shape::Circle(r)), Identifier (Enum::RED or '_')
+      body: Node<Kind.Block>;
+    },
+
     [Kind.SectionFieldDecl]: class extends Factory(Kind.SectionFieldDecl) {
       name: Node<any>;
       colonToken: StructToken | null;
       value: Node<any>;
+    },
+
+    [Kind.IfStatement]: class extends Factory(Kind.IfStatement) {
+      condition: Node<any>;
+      thenBranch: Node<any>;
+      elseBranch: Node<any> | null;
+    },
+
+    [Kind.WhileStatement]: class extends Factory(Kind.WhileStatement) {
+      condition: Node<any>;
+      body: Node<any>;
+    },
+
+    [Kind.ReturnStatement]: class extends Factory(Kind.ReturnStatement) {
+      expression: Node<any> | null;
+    },
+
+    [Kind.JumpStatement]: class extends Factory(Kind.JumpStatement) {
+      jumpKind: "break" | "continue";
+      label?: StructToken;
+    },
+
+    [Kind.LabelStatement]: class extends Factory(Kind.LabelStatement) {
+      name: StructToken;
+      statement: Node<any>;
     },
   } as const;
 

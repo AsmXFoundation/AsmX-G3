@@ -13,14 +13,14 @@ const ConstRegisterFile = {
     'rbp': { code: 5, size: header_cjs_1.OperandSize.Qword },
     'rsi': { code: 6, size: header_cjs_1.OperandSize.Qword },
     'rdi': { code: 7, size: header_cjs_1.OperandSize.Qword },
-    'r8': { code: 0, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r9': { code: 1, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r10': { code: 2, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r11': { code: 3, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r12': { code: 4, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r13': { code: 5, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r14': { code: 6, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
-    'r15': { code: 7, size: header_cjs_1.OperandSize.Qword, requiresRex: true },
+    'r8': { code: 0, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r9': { code: 1, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r10': { code: 2, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r11': { code: 3, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r12': { code: 4, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r13': { code: 5, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r14': { code: 6, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
+    'r15': { code: 7, size: header_cjs_1.OperandSize.Qword, requiresRex: true, isExtended: true },
     // 32-bit
     'eax': { code: 0, size: header_cjs_1.OperandSize.Dword },
     'ecx': { code: 1, size: header_cjs_1.OperandSize.Dword },
@@ -130,6 +130,25 @@ HardwareMachineFactoryBase.IntegerTypes = IntegerTypes;
 class HardwareMachineFactoryExceptionJournal extends HardwareMachineFactoryBase {
     static throw(message) {
         this.journal.push(`\x1b[41m🐞\x1b[0m ${message}\x1b[0m`);
+    }
+    static throw_runtime(message) {
+        console.log(`\x1b[41m🐞\x1b[0m ${message}\x1b[0m`);
+    }
+    static throw_stacktrace() {
+        const journal_formed = [];
+        for (let index = 0; index < this.journal.length; index++) {
+            const message = this.journal[index];
+            const count = this.journal.filter(m => m == message).length;
+            if (count > 0) {
+                this.journal = this.journal.filter(m => m != message);
+                journal_formed.push(message + `(x${count})`);
+            }
+            else
+                journal_formed.push(message);
+        }
+        for (const message of journal_formed) {
+            console.log(message);
+        }
     }
 }
 exports.HardwareMachineFactoryExceptionJournal = HardwareMachineFactoryExceptionJournal;
@@ -539,6 +558,9 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
     setInstructionSet(set) {
         this.instructionSet = set;
     }
+    hasInstruction(instruction) {
+        return this.instructionSet.has(instruction);
+    }
     getSource() {
         return this.source;
     }
@@ -810,12 +832,15 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         if (!definition) {
             HardwareMachineFactoryExceptionJournal.throw(`Unknown instruction mnemonic: ${mnemonic}`);
             // console.log(`Unknown instruction mnemonic: ${mnemonic}`);
+            return;
         }
         // Find the matching variant based on operands
         const variant = this.findMatchingVariant(definition, operands);
         if (!variant) {
-            HardwareMachineFactoryExceptionJournal.throw(`No matching instruction variant found for mnemonic: ${mnemonic}`);
+            const error = `No matching instruction variant found for mnemonic: ${mnemonic}`;
+            HardwareMachineFactoryExceptionJournal.throw(error);
             // throw new Error(`No matching variant for ${mnemonic} with operands: ${JSON.stringify(operands)}`);
+            return { ok: false, error };
         }
         const buffers = [];
         // --- Determine Prefixes (Operand Size, REX) ---
@@ -976,6 +1001,7 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
         const finalBuffer = Buffer.concat(buffers);
         this.source = Buffer.concat([this.source, finalBuffer]);
         // console.log(`Compiled ${mnemonic}: ${finalBuffer.toString('hex')}`);
+        return { ok: true, error: "" };
     }
 }
 exports.HardwareMachineFactory = HardwareMachineFactory;

@@ -13,9 +13,11 @@ const header_cjs_1 = require("../hwc/header.cjs");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const expression_cjs_1 = require("../../../../types/expression.cjs");
+const token_cjs_1 = require("../../../../types/token.cjs");
 const unwrap_cjs_1 = require("../../../../types/unwrap.cjs");
 const operand_parser_cjs_1 = require("./operand-parser.cjs");
 const type_resolver_cjs_1 = require("../../../../parsing/type_resolver.cjs");
+const type_checker_cjs_1 = require("../../../../parsing/type-checker.cjs");
 const interpreter_cjs_1 = require("./interpreter.cjs");
 const exceptions = require('llvm.js/exceptions');
 const AssemblyInstructionDescriptorTable = require('../hwm/tbl.cjs');
@@ -26,6 +28,9 @@ class CompilerDriver {
         this.vartable = new Map();
         this.fnMap = new Map(); // string -> {name: str, bodyResult: {buffer, relocs}, isPublic: bool, isMain: bool }
         this.kernelSymbolsCache = null;
+        this.string_literal_counter = 0;
+        this.loopCounter = 0;
+        this.loopLabels = [];
         // =================================================================
         // STATEMENTS & INSTRUCTIONS
         // =================================================================
@@ -61,6 +66,7 @@ class CompilerDriver {
         this.hwm.setInstructionSet(sets.reduce((a, b) => new Map([...a, ...b]), new Map()));
         this.sets = this.hwm.getInstructionSet();
         this.nodes = nodes;
+        this.pre_register_functions(this.nodes); // ⚡ PRE-PASS for Forward Declarations
         this.compile_translation_unit();
         this.append_all_functions();
         if (this.targetFormat == header_cjs_1.OutputFormat.KERNEL_OBJECT) {
@@ -79,12 +85,39 @@ class CompilerDriver {
         }
         return crx;
     }
+    pre_register_functions(nodes) {
+        for (const node of nodes) {
+            if (!node)
+                continue;
+            if (node.kind === expression_cjs_1.Syntax.Kind.FunctionDeclaration) {
+                const ann = type_resolver_cjs_1.Annotations.get(node);
+                const fn_name = ann?._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+                if (!this.fnMap.has(fn_name)) {
+                    this.fnMap.set(fn_name, { isForwardDeclared: true });
+                }
+            }
+            else if (node.kind === expression_cjs_1.Syntax.Kind.NamespaceDeclaration) {
+                let bodyNodes = [];
+                if (Array.isArray(node.body))
+                    bodyNodes = node.body;
+                else if (node.body?.statements)
+                    bodyNodes = node.body.statements;
+                this.pre_register_functions(bodyNodes);
+            }
+        }
+    }
     compile_statement(statement) {
         if (statement.kind === expression_cjs_1.Syntax.Kind.Instruction) {
             this.compile_instruction(statement);
         }
         if (statement.kind === expression_cjs_1.Syntax.Kind.FunctionDeclaration) {
             this.compile_function_declaration(statement);
+        }
+        if (statement.kind == expression_cjs_1.Syntax.Kind.VariableDeclaration) {
+            this.compile_global_variable_declaration(statement);
+        }
+        if (statement.kind == expression_cjs_1.Syntax.Kind.NamespaceDeclaration) {
+            this.compile_namespace_declaration(statement);
         }
     }
     compile_instruction(node) {
@@ -105,7 +138,7 @@ class CompilerDriver {
      * relocation record.  Returns null if the operand shape is unsupported
      * in this context.
      */
-    operand_to_hwm(parsed, instr_buf_so_far) {
+    operand_to_hwm(parsed, instr_buf_so_far, frame) {
         switch (parsed.type) {
             case 'register':
             case 'segment_register':
@@ -118,44 +151,94 @@ class CompilerDriver {
                     hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(Number(parsed.value)),
                     reloc: null,
                 };
+            // case 'variable_address': {
+            //   // LEA reg, [rip + disp32]  — we emit a placeholder and record a reloc.
+            //   // Caller is responsible for picking the destination register; here we
+            //   // return a memory operand that signals "rip-relative address load".
+            //   const mem_op = HardwareMachineFactoryParserOpernadType.parseMem({
+            //     size: 8,
+            //     ripRelative: true,
+            //     displacement: 0,
+            //   });
+            //   return {
+            //     hwm_op: mem_op,
+            //     reloc: {
+            //       section: '.text',
+            //       offset: 0,               // adjusted by caller relative to full buf
+            //       type: 2,                 // R_X86_64_PC32
+            //       symbolName: parsed.address,
+            //       addend: this.targetFormat === OutputFormat.EXEC_ELF64 ? 0 : -4,
+            //       _deferred: true,
+            //     },
+            //   };
+            // }
+            // case 'variable_value':
+            //   // $name in a generic instruction — emit as RIP-relative memory read.
+            //   return {
+            //     hwm_op: HardwareMachineFactoryParserOpernadType.parseMem({
+            //       size: 8,
+            //       ripRelative: true,
+            //       displacement: 0,
+            //     }),
+            //     reloc: {
+            //       section: '.text',
+            //       offset: 0,
+            //       type: 2,
+            //       symbolName: parsed.value,
+            //       addend: -4,
+            //       _deferred: true,
+            //     },
+            //   };
             case 'variable_address': {
-                // LEA reg, [rip + disp32]  — we emit a placeholder and record a reloc.
-                // Caller is responsible for picking the destination register; here we
-                // return a memory operand that signals "rip-relative address load".
-                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
-                    size: 8,
-                    ripRelative: true,
-                    displacement: 0,
-                });
-                return {
-                    hwm_op: mem_op,
-                    reloc: {
-                        section: '.text',
-                        offset: 0, // adjusted by caller relative to full buf
-                        type: 2, // R_X86_64_PC32
-                        symbolName: parsed.address,
-                        addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
-                        _deferred: true,
-                    },
-                };
+                const local = frame?.vars.get(parsed.address);
+                if (local) {
+                    // Local variable: [rbp - offset]
+                    return {
+                        hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset }),
+                        reloc: null
+                    };
+                }
+                else {
+                    // Global variable: [rip + sym]
+                    return {
+                        hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 }),
+                        reloc: {
+                            section: '.text',
+                            offset: 0,
+                            type: 2,
+                            symbolName: parsed.address,
+                            addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
+                            _deferred: true,
+                        }
+                    };
+                }
             }
-            case 'variable_value':
-                // $name in a generic instruction — emit as RIP-relative memory read.
-                return {
-                    hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
-                        size: 8,
-                        ripRelative: true,
-                        displacement: 0,
-                    }),
-                    reloc: {
-                        section: '.text',
-                        offset: 0,
-                        type: 2,
-                        symbolName: parsed.value,
-                        addend: -4,
-                        _deferred: true,
-                    },
-                };
+            case 'variable_value': {
+                const local = frame?.vars.get(parsed.value);
+                if (local) {
+                    // Local variable: [rbp - offset]
+                    return {
+                        hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: local.size, base: 'rbp', displacement: local.rbp_offset }),
+                        reloc: null
+                    };
+                }
+                else {
+                    // Global variable: [rip + sym]
+                    const vinfo = this.vartable.get(parsed.value);
+                    const size = vinfo?.typeSize || 8;
+                    return {
+                        hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: size, ripRelative: true, displacement: 0 }),
+                        reloc: {
+                            section: '.text',
+                            offset: 0,
+                            type: 2,
+                            symbolName: parsed.value,
+                            addend: -4,
+                            _deferred: true,
+                        }
+                    };
+                }
+            }
             case 'memory_register':
                 return {
                     hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
@@ -165,12 +248,24 @@ class CompilerDriver {
                     }),
                     reloc: null,
                 };
+            case 'memory_sib':
+                // SIB: [base + index * scale + displacement]  e.g. (%rax, %rdx, 2)
+                return {
+                    hwm_op: main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
+                        size: 8,
+                        base: parsed.base,
+                        index: parsed.index,
+                        scale: parsed.scale,
+                        displacement: parsed.displacement,
+                    }),
+                    reloc: null,
+                };
         }
     }
     // =================================================================
     // GENERIC INSTRUCTION  (new AST)
     // =================================================================
-    compile_generic_instruction(node) {
+    compile_generic_instruction(node, frame) {
         const { raw: mnemonic, token: mnemonic_token } = unwrap_cjs_1.UnwrapSyntax.emit_name(node);
         if (!this.sets.has(mnemonic)) {
             new exceptions.ExpressionException(`Unknown x86-64 instruction: ${mnemonic}`, mnemonic_token, this.zcc_compiler_warning);
@@ -178,37 +273,31 @@ class CompilerDriver {
         }
         const hwm_operands = [];
         const relocations = [];
-        let instructionBuffer = Buffer.alloc(0);
+        // Separate buffer for preparatory instructions
+        let prefixBuffer = Buffer.alloc(0);
+        const prefixRelocs = [];
         for (const operand_node of node.operands) {
             const parsed = operand_parser_cjs_1.OperandParser.parse(operand_node);
             if (!parsed) {
                 new exceptions.ExpressionException(`Unrecognised operand in '${mnemonic}'`, unwrap_cjs_1.UnwrapSyntax.get_start_token(operand_node), this.zcc_compiler_warning);
                 return { buffer: Buffer.alloc(0), relocs: [] };
             }
-            this.check_define_var_address_or_value(operand_node, parsed);
-            // Variable address (LEA pattern) requires its own instruction emission.
-            if (parsed.type === 'variable_address') {
-                // Caller passes dest register as the first operand; skip here for now.
-                // We'll handle this inline so that LEA operand pairs work correctly.
-                // (see compile_syscall_instruction for the full LEA pattern)
-                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
-                    size: 8,
-                    ripRelative: true,
-                    displacement: 0,
-                });
-                hwm_operands.push(mem_op);
-                const disp_offset_placeholder = 0; // patched below after compile
-                relocations.push({
-                    section: '.text',
-                    offset: disp_offset_placeholder,
-                    type: 2,
-                    symbolName: parsed.address,
-                    addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
-                    _deferred: true, // displacement offset determined after hwm.compile()
-                });
+            if (parsed.type === 'subscript' || parsed.type === 'subscript_address') {
+                const addrRes = this.compile_subscript_address(parsed.node, 'r11', frame);
+                for (const r of addrRes.relocs) {
+                    prefixRelocs.push({ ...r, offset: r.offset + prefixBuffer.length });
+                }
+                prefixBuffer = Buffer.concat([prefixBuffer, addrRes.buffer]);
+                if (parsed.type === 'subscript') {
+                    hwm_operands.push(main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: addrRes.elemSize, base: 'r11', displacement: 0 }));
+                }
+                else {
+                    hwm_operands.push(main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('r11'));
+                }
                 continue;
             }
-            const conv = this.operand_to_hwm(parsed, instructionBuffer);
+            this.check_define_var_address_or_value(operand_node, parsed, frame);
+            const conv = this.operand_to_hwm(parsed, Buffer.alloc(0), frame);
             if (!conv)
                 continue;
             hwm_operands.push(conv.hwm_op);
@@ -216,23 +305,26 @@ class CompilerDriver {
                 relocations.push(conv.reloc);
         }
         this.hwm.clearSource();
-        // swap for Intel Syntax
         let final_hwm_operands = [];
         for (let i = hwm_operands.length - 1; i >= 0; --i) {
-            const hwm_op = hwm_operands[i];
-            final_hwm_operands.push(hwm_op);
+            final_hwm_operands.push(hwm_operands[i]);
         }
         this.hwm.compile(mnemonic, final_hwm_operands);
-        instructionBuffer = Buffer.from(this.hwm.getSource());
-        // Resolve deferred relocation offsets — find 00 00 00 00 placeholder.
+        // Save the main instruction separately, without clearing the prefixBuffer!
+        const mainBuffer = Buffer.from(this.hwm.getSource());
         for (const reloc of relocations) {
             if (reloc._deferred) {
                 delete reloc._deferred;
-                const dispOffset = instructionBuffer.indexOf(Buffer.from([0, 0, 0, 0]));
+                const dispOffset = mainBuffer.indexOf(Buffer.from([0, 0, 0, 0]));
                 reloc.offset = dispOffset >= 0 ? dispOffset : 0;
             }
+            // Shift the relocations of the main instruction by the length of the prefix code.
+            reloc.offset += prefixBuffer.length;
         }
-        return { buffer: instructionBuffer, relocs: relocations };
+        return {
+            buffer: Buffer.concat([prefixBuffer, mainBuffer]),
+            relocs: [...prefixRelocs, ...relocations]
+        };
     }
     // =================================================================
     // @section  (new AST)
@@ -277,7 +369,8 @@ class CompilerDriver {
         }
         const qt = ann.resolvedType;
         const base_type = qt.resolve().type;
-        const typeSize = base_type.size();
+        // const typeSize = base_type.size();
+        const typeSize = this.qual_type_size(qt);
         let dataBuffer;
         if (['data', 'rodata'].includes(section_name)) {
             // const constValue = this.extract_constant_value(value_node);
@@ -303,7 +396,8 @@ class CompilerDriver {
             type: qt.toString(),
             section: section_name,
             size: dataBuffer.length,
-            contentLength: dataBuffer.length
+            contentLength: dataBuffer.length,
+            typeSize
         });
     }
     serialize_const_value(cv, qt) {
@@ -312,7 +406,8 @@ class CompilerDriver {
             const buf = Buffer.from((string_view) + '\0');
             return buf;
         }
-        const size = qt.type.size();
+        // const size = qt.type.size();
+        const size = this.qual_type_size(qt);
         const buf = Buffer.alloc(size);
         if (cv.kind === 'integer') {
             const num = Number(cv.value);
@@ -361,7 +456,7 @@ class CompilerDriver {
     // =================================================================
     // @syscall  (new AST)
     // =================================================================
-    compile_syscall_instruction(node) {
+    compile_syscall_instruction(node, frame) {
         const syscall_abi = ['rax', 'rdi', 'rsi', 'rdx', 'r10', 'r8', 'r9'];
         // @syscall can be called with no arguments (bare syscall) or one tuple arg.
         const tuple_node = node.operands[0];
@@ -379,7 +474,7 @@ class CompilerDriver {
             const parsed = operand_parser_cjs_1.OperandParser.parse(args[i]);
             if (!parsed)
                 continue;
-            this.check_define_var_address_or_value(args[i], parsed);
+            this.check_define_var_address_or_value(args[i], parsed, frame);
             const dst_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(target_reg);
             if (parsed.type === 'immediate') {
                 this.hwm.clearSource();
@@ -398,42 +493,67 @@ class CompilerDriver {
                 instructionBuffer = Buffer.concat([instructionBuffer, Buffer.from(this.hwm.getSource())]);
             }
             else if (parsed.type === 'variable_address') {
-                // LEA %target_reg, [rip + symbol]
-                const lea_ops = [
-                    dst_op,
-                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 }),
-                ];
-                this.hwm.clearSource();
-                this.hwm.compile('lea', lea_ops);
-                const leaBuf = Buffer.from(this.hwm.getSource());
-                const dispOffset = leaBuf.indexOf(Buffer.from([0, 0, 0, 0]));
-                allRelocs.push({
-                    section: '.text',
-                    offset: instructionBuffer.length + (dispOffset >= 0 ? dispOffset : leaBuf.length - 4),
-                    type: 2,
-                    symbolName: parsed.address,
-                    addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
-                });
-                instructionBuffer = Buffer.concat([instructionBuffer, leaBuf]);
+                const local = frame?.vars.get(parsed.address);
+                if (local) {
+                    const lea_ops = [
+                        dst_op,
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset }),
+                    ];
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', lea_ops);
+                    instructionBuffer = Buffer.concat([instructionBuffer, Buffer.from(this.hwm.getSource())]);
+                }
+                else {
+                    const lea_ops = [
+                        dst_op,
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 }),
+                    ];
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', lea_ops);
+                    const leaBuf = Buffer.from(this.hwm.getSource());
+                    const dispOffset = leaBuf.indexOf(Buffer.from([0, 0, 0, 0]));
+                    allRelocs.push({
+                        section: '.text',
+                        offset: instructionBuffer.length + (dispOffset >= 0 ? dispOffset : leaBuf.length - 4),
+                        type: 2,
+                        symbolName: parsed.address,
+                        addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
+                    });
+                    instructionBuffer = Buffer.concat([instructionBuffer, leaBuf]);
+                }
             }
             else if (parsed.type === 'variable_value') {
-                // MOV %target_reg, [rip + symbol]  (load the variable's value)
-                const mov_ops = [
-                    dst_op,
-                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 }),
-                ];
-                this.hwm.clearSource();
-                this.hwm.compile('mov', mov_ops);
-                const movBuf = Buffer.from(this.hwm.getSource());
-                const dispOffset = movBuf.indexOf(Buffer.from([0, 0, 0, 0]));
-                allRelocs.push({
-                    section: '.text',
-                    offset: instructionBuffer.length + (dispOffset >= 0 ? dispOffset : movBuf.length - 4),
-                    type: 2,
-                    symbolName: parsed.value,
-                    addend: -4,
-                });
-                instructionBuffer = Buffer.concat([instructionBuffer, movBuf]);
+                const local = frame?.vars.get(parsed.value);
+                if (local) {
+                    const sub_reg = this.get_sub_register(target_reg, local.size);
+                    const sub_dst_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sub_reg);
+                    const mov_ops = [
+                        sub_dst_op,
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: local.size, base: 'rbp', displacement: local.rbp_offset }),
+                    ];
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', mov_ops);
+                    instructionBuffer = Buffer.concat([instructionBuffer, Buffer.from(this.hwm.getSource())]);
+                }
+                else {
+                    // MOV %target_reg, [rip + symbol]  (load the variable's value)
+                    const mov_ops = [
+                        dst_op,
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 }),
+                    ];
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', mov_ops);
+                    const movBuf = Buffer.from(this.hwm.getSource());
+                    const dispOffset = movBuf.indexOf(Buffer.from([0, 0, 0, 0]));
+                    allRelocs.push({
+                        section: '.text',
+                        offset: instructionBuffer.length + (dispOffset >= 0 ? dispOffset : movBuf.length - 4),
+                        type: 2,
+                        symbolName: parsed.value,
+                        addend: -4,
+                    });
+                    instructionBuffer = Buffer.concat([instructionBuffer, movBuf]);
+                }
             }
         }
         // Emit the actual SYSCALL opcode (0F 05).
@@ -444,7 +564,7 @@ class CompilerDriver {
     // =================================================================
     // @call  (new AST)
     // =================================================================
-    compile_call_instruction(node) {
+    compile_call_instruction(node, frame) {
         if (node.operands.length > 1) {
             new exceptions.ExpressionException(`'@call' expects exactly one operand`, unwrap_cjs_1.UnwrapSyntax.emit_name(node).token, this.zcc_compiler_warning);
             return { buffer: Buffer.alloc(0), relocs: [] };
@@ -499,10 +619,2104 @@ class CompilerDriver {
         };
     }
     // =================================================================
+    // LOCAL VARIABLE FRAME  (two-pass helpers)
+    // =================================================================
+    /** Returns the byte-size of a QualType.  Defaults to 8 (pointer/unknown). */
+    qual_type_size(qt) {
+        try {
+            const resolved = qt.resolve().type;
+            if (resolved.kind === type_checker_cjs_1.TypeSystem.TypeKind.Reference || resolved.kind === type_checker_cjs_1.TypeSystem.TypeKind.Function) {
+                return 8;
+            }
+            const sz = resolved.size();
+            return sz === 0 ? 8 : sz;
+        }
+        catch {
+            return 8;
+        }
+        ;
+    }
+    /**
+     * Intern an anonymous string literal into .rodata.
+     * Returns the label (e.g. ".Lstr.0") that can be used in a RIP-relative LEA.
+     * Each unique call site gets its own label — no deduplication.
+     */
+    intern_string_literal(value) {
+        const label = `.Lstr.${this.string_literal_counter++}`;
+        const str_view = interpreter_cjs_1.Interpreter.string_view.interpretEscapeSequences(value);
+        const buf = Buffer.from(str_view + '\0');
+        this.hwc.addVariable(header_cjs_1.rwLockVar.READ, label, buf, header_cjs_1.SYMBOL_TYPE_BIND.STB_LOCAL);
+        this.vartable.set(label, {
+            type: 'const char*',
+            section: 'rodata',
+            size: buf.length,
+            contentLength: buf.length,
+            typeSize: 8,
+        });
+        return label;
+    }
+    /** Round n up to the next multiple of `to`. */
+    align_up(n, to) {
+        if (!to)
+            return n;
+        if (n === 0)
+            return 0;
+        return Math.ceil(n / to) * to;
+    }
+    /**
+     * PASS 1 — scan the function body and parameters to build a LocalVarFrame.
+     * Assigns an [rbp+offset] slot to every parameter and local variable.
+     * The total frame size is rounded up to a multiple of 16 to keep %rsp
+     * 16-byte-aligned before any CALL instruction.
+     */
+    pre_scan_local_frame(body, params) {
+        const vars = new Map();
+        let offset = 0;
+        const push_var = (name, size, is_param) => {
+            const align = Math.min(size, 8);
+            offset += size;
+            offset = this.align_up(offset, align);
+            vars.set(name, { name, size, rbp_offset: -offset, is_param });
+        };
+        // Parameters are spilled from SysV registers to stack slots.
+        if (params) {
+            for (const param of params) {
+                if (!param?.name)
+                    continue;
+                const p_name = unwrap_cjs_1.UnwrapSyntax.unwrap(param.name).raw;
+                const ann = type_resolver_cjs_1.Annotations.get(param);
+                const sz = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+                push_var(p_name, sz, true);
+            }
+        }
+        // Recursive search for local variables within nested statements (if / while / block)
+        const scan_statements = (stmts) => {
+            for (const stmt of stmts) {
+                if (!stmt)
+                    continue;
+                if (stmt.kind === expression_cjs_1.Syntax.Kind.VariableDeclaration) {
+                    const vardecl_stmt = stmt;
+                    const name = unwrap_cjs_1.UnwrapSyntax.unwrap(vardecl_stmt.name).raw;
+                    const ann = type_resolver_cjs_1.Annotations.get(stmt);
+                    const elemSz = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+                    const dims = vardecl_stmt.arrayDimensions;
+                    if (dims && dims.length > 0) {
+                        // Evaluate each dimension as a compile-time constant
+                        const eval_dim = (d) => {
+                            if (!d)
+                                return 0;
+                            const da = type_resolver_cjs_1.Annotations.get(d);
+                            if (da?.constValue?.kind === 'integer')
+                                return Number(da.constValue.value);
+                            const raw = unwrap_cjs_1.UnwrapSyntax.unwrap(d).raw;
+                            const n = Number(raw);
+                            return isNaN(n) ? 1 : n;
+                        };
+                        const totalSz = dims.reduce((acc, d) => acc * eval_dim(d), elemSz);
+                        const align = Math.min(elemSz, 8);
+                        offset += totalSz;
+                        offset = this.align_up(offset, align);
+                        vars.set(name, {
+                            name,
+                            size: totalSz,
+                            rbp_offset: -offset,
+                            is_param: false,
+                            _isArray: true,
+                            elemSize: elemSz,
+                        });
+                    }
+                    else {
+                        push_var(name, elemSz, false);
+                    }
+                }
+                else if (stmt.kind === expression_cjs_1.Syntax.Kind.BinaryExpression) {
+                    const bin = stmt;
+                    const op = bin.operator?.lexem ?? bin.operator;
+                    if (op === '=' && bin.left?.kind === expression_cjs_1.Syntax.Kind.Call) {
+                        const fnPtrName = this.extract_fn_ptr_name(bin.left);
+                        if (fnPtrName) {
+                            push_var(fnPtrName, 8, false); // Pointers are always 8 bytes.
+                        }
+                    }
+                }
+                else if (stmt.kind === expression_cjs_1.Syntax.Kind.Block) {
+                    scan_statements(stmt.statements ?? []);
+                }
+                else if (stmt.kind === expression_cjs_1.Syntax.Kind.IfStatement) {
+                    const ifStmt = stmt;
+                    if (ifStmt.thenBranch)
+                        scan_statements([ifStmt.thenBranch]);
+                    if (ifStmt.elseBranch)
+                        scan_statements([ifStmt.elseBranch]);
+                }
+                else if (stmt.kind === expression_cjs_1.Syntax.Kind.WhileStatement) {
+                    const whileStmt = stmt;
+                    if (whileStmt.body)
+                        scan_statements([whileStmt.body]);
+                }
+                else if (stmt.kind === expression_cjs_1.Syntax.Kind.InspectStatement) {
+                    const insp = stmt;
+                    if (insp.cases) {
+                        for (const c of insp.cases) {
+                            // Register bindings (w)
+                            if (c._bindings) {
+                                for (const bind of c._bindings) {
+                                    push_var(bind.name, bind.size || 8, false);
+                                }
+                            }
+                            // Scan the body of the case statement itself
+                            if (c.body)
+                                scan_statements([c.body]);
+                        }
+                    }
+                }
+            }
+        };
+        // Start the recursive scanner
+        if (body && body.statements) {
+            scan_statements(body.statements);
+        }
+        // Round total to 16 bytes → keeps %rsp aligned before nested CALL.
+        const total_stack_size = this.align_up(offset, 16);
+        return { vars, total_stack_size };
+    }
+    // =================================================================
+    // PASS 2 CODEGEN — local variables, parameters, high-level calls
+    // =================================================================
+    /**
+     * Emit PASS 2 spill code: save the first ≤6 parameters from their
+     * SysV integer registers (%rdi, %rsi, %rdx, %rcx, %r8, %r9) to their
+     * stack slots.  Must be the very first thing in the function body.
+     */
+    compile_param_spills(params, frame) {
+        const sysv_regs = ['rdi', 'rsi', 'rdx', 'rcx', 'r8', 'r9'];
+        let buf = Buffer.alloc(0);
+        for (let i = 0; i < Math.min(params.length, sysv_regs.length); i++) {
+            if (!params[i]?.name)
+                continue;
+            const p_name = unwrap_cjs_1.UnwrapSyntax.unwrap(params[i].name).raw;
+            const local = frame.vars.get(p_name);
+            if (!local)
+                continue;
+            // asm: "mov %rdi, -8(%rbp)"
+            const dst_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
+                size: local.size, base: 'rbp', displacement: local.rbp_offset,
+            });
+            const sub_reg = this.get_sub_register(sysv_regs[i], local.size);
+            const src_reg = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sub_reg);
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [dst_mem, src_reg]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        return { buffer: buf, relocs: [] };
+    }
+    // ---------------------------------------------------------------------------
+    // compile_main_entry_param_spills
+    //
+    // For ELF executables without CRT, `main` IS the ELF entry point.
+    // The Linux kernel sets up the initial stack before the entry point runs:
+    //
+    //   rsp+0           argc       (integer count, stored as 8-byte value)
+    //   rsp+8           argv[0]    (char* — program name string)
+    //   rsp+16          argv[1]    ...
+    //   rsp+8*(argc)    argv[argc-1]
+    //   rsp+8*(argc+1)  NULL       (argv terminator)
+    //   rsp+8*(argc+2)  envp[0]    (char* — first env var string)
+    //   ...
+    //
+    // After our prologue `push rbp; mov rsp, rbp` (RBP ← initial RSP − 8):
+    //   [rbp+0]  = saved RBP (0 at process start — kernel zeroes registers)
+    //   [rbp+8]  = argc                ←  positional param 0
+    //   [rbp+16] = argv[0]             ←  argv base ptr = &[rbp+16], param 1
+    //   [rbp + argc*8 + 24] = envp[0]  ←  envp base ptr (computed at runtime), param 2
+    //
+    // Param 3 = "stackp" = initial RSP = rbp+8 (address of the argc slot).
+    //
+    // Parameter NAMES and TYPES are fully user-defined; only position matters.
+    // ---------------------------------------------------------------------------
+    compile_main_entry_param_spills(params, frame) {
+        let buf = Buffer.alloc(0);
+        if (params.length === 0)
+            return { buffer: buf, relocs: [] };
+        const rax_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax');
+        const rcx_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx');
+        // ── helpers ──────────────────────────────────────────────────────────────
+        // mov rax, [rbp+disp]
+        const read_rbp_plus = (disp) => {
+            const src = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: disp });
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [rax_op, src]);
+            return Buffer.from(this.hwm.getSource());
+        };
+        // lea rax, [rbp+disp]  — loads the ADDRESS of that slot, not the value
+        const lea_rbp_plus = (disp) => {
+            const src = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: disp });
+            this.hwm.clearSource();
+            this.hwm.compile('lea', [rax_op, src]);
+            return Buffer.from(this.hwm.getSource());
+        };
+        // mov [rbp+local.rbp_offset], rax  (size-appropriate sub-register)
+        const store_rax_to = (local) => {
+            const dst = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: local.size, base: 'rbp', displacement: local.rbp_offset });
+            const reg = this.get_sub_register('rax', local.size);
+            const reg_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(reg);
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [dst, reg_op]);
+            return Buffer.from(this.hwm.getSource());
+        };
+        const get_slot = (i) => {
+            if (i >= params.length || !params[i]?.name)
+                return null;
+            const p_name = unwrap_cjs_1.UnwrapSyntax.unwrap(params[i].name).raw;
+            return frame.vars.get(p_name) ?? null;
+        };
+        // ── param 0 : argc ───────────────────────────────────────────────────────
+        // Integer value stored at [rbp+8].
+        const s0 = get_slot(0);
+        if (s0)
+            buf = Buffer.concat([buf, read_rbp_plus(8), store_rax_to(s0)]);
+        // ── param 1 : argv ───────────────────────────────────────────────────────
+        // char** argv — pointer to the argv[0] slot which lives at [rbp+16].
+        // We use LEA so argv holds &argv[0], not argv[0]'s value.
+        // ── param 1 : argv[0] ────────────────────────────────────────────────────
+        // The kernel lays the argv strings as *values* on the stack:
+        //   [rbp+16] = argv[0]  (char* — program name string pointer)
+        //   [rbp+24] = argv[1]  ...
+        // We load the VALUE at [rbp+16] (MOV, not LEA) so that the parameter
+        // slot holds argv[0] directly — a char* the user can pass to write().
+        // If the caller declared char** and wants &argv[0], they can LEA manually.
+        const s1 = get_slot(1);
+        if (s1)
+            buf = Buffer.concat([buf, lea_rbp_plus(16), store_rax_to(s1)]);
+        // if (s1) buf = Buffer.concat([buf, read_rbp_plus(16), store_rax_to(s1)]);
+        // ── param 2 : envp ───────────────────────────────────────────────────────
+        // envp = &argv[argc+1] = rbp+16 + (argc+1)*8 = rbp + argc*8 + 24
+        // Requires runtime SIB: mov rcx,[rbp+8]; lea rax,[rbp+rcx*8+24]
+        const s2 = get_slot(2);
+        if (s2) {
+            // mov rcx, [rbp+8]           ; rcx = argc
+            const argc_src = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: 8 });
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [rcx_op, argc_src]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            // lea rax, [rbp + rcx*8 + 24]   ; rax = envp
+            const envp_src = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', index: 'rcx', scale: 8, displacement: 24 });
+            this.hwm.clearSource();
+            this.hwm.compile('lea', [rax_op, envp_src]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource()), store_rax_to(s2)]);
+        }
+        // ── param 3 : stackp ─────────────────────────────────────────────────────
+        // The initial RSP before the prologue = rbp+8.
+        // (After "push rbp" the old rsp = rbp + 8; [rbp+8] = argc = old rsp[0].)
+        // LEA gives a void* pointing to the start of the kernel argument block.
+        const s3 = get_slot(3);
+        if (s3)
+            buf = Buffer.concat([buf, lea_rbp_plus(8), store_rax_to(s3)]);
+        return { buffer: buf, relocs: [] };
+    }
+    // Helper function for method mangling (Point::set_x -> Point__set_x)
+    get_mangled_method_name(ctorNode, structName) {
+        return type_resolver_cjs_1.Annotations.get(ctorNode)._mangledName ?? `${structName}__UNRESOLVED_FETCH`;
+    }
+    compile_expr_to_reg(node, reg_name, frame) {
+        const relocs = [];
+        const dst_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(reg_name);
+        const ann = type_resolver_cjs_1.Annotations.get(node);
+        if (node.kind === expression_cjs_1.Syntax.Kind.ImplicitCastExpression) {
+            // For numeric types on x86, a cast is simply the evaluation of the internal expression. 
+            // The actual byte truncation (int32 -> char) occurs automatically
+            // when writing to memory via a low-order register (e.g., %al).
+            return this.compile_expr_to_reg(node.convert, reg_name, frame);
+        }
+        // ⚡ INTERCEPT UNION VARIANT CONSTRUCTOR (both Call and Identifier forms) ⚡
+        if (ann?._constructorCall?.isUnion) {
+            const { tag, args } = ann._constructorCall;
+            const unionSize = ann.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+            const alloc_size = this.align_up(unionSize, 16);
+            let buf = Buffer.alloc(0);
+            // 1. Allocate temporary space on the stack
+            this.hwm.clearSource();
+            this.hwm.compile('sub', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(alloc_size)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            // 2. Write TAG
+            const tagMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 4, base: 'rsp', displacement: 0 });
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [tagMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(tag)]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            // 3. Assemble and write arguments
+            let currentPayloadOffset = 4;
+            const argsList = (args || []);
+            for (const arg of argsList) {
+                const argRes = this.compile_expr_to_reg(arg, 'rax', frame);
+                for (const r of argRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, argRes.buffer]);
+                const argTypeAnn = type_resolver_cjs_1.Annotations.get(arg);
+                const argSize = argTypeAnn?.resolvedType ? this.qual_type_size(argTypeAnn.resolvedType) : 8;
+                if (argSize > 8) {
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdi'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rsp', displacement: currentPayloadOffset })
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource()), this.emit_memcpy('rdi', 'rax', argSize)]);
+                }
+                else {
+                    const payloadMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: argSize, base: 'rsp', displacement: currentPayloadOffset });
+                    const raxSub = this.get_sub_register('rax', argSize);
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [payloadMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub)]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                currentPayloadOffset += argSize;
+            }
+            // 4. Return the result
+            if (unionSize > 8) {
+                // Return large objects by ADDRESS; do NOT free memory here (the caller will clean up the stack).
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [
+                    dst_op,
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            else {
+                // Return small objects (<8 bytes) by VALUE; free memory immediately.
+                this.hwm.clearSource();
+                const dst_sub = this.get_sub_register(reg_name, unionSize);
+                this.hwm.compile('mov', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dst_sub),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: unionSize, base: 'rsp', displacement: 0 })
+                ]);
+                this.hwm.compile('add', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(alloc_size)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            return { buffer: buf, relocs };
+        }
+        // 1. List / parenthesised expression: (expr)  or  (a, b, c)
+        if (node.kind === expression_cjs_1.Syntax.Kind.List) {
+            const ann = type_resolver_cjs_1.Annotations.get(node);
+            // If this is a constructor call (e.g., Type { args }), create a temporary object.
+            if (ann?._constructorCall && !ann._constructorCall.isUnion) {
+                const { node: ctor_node, args } = ann._constructorCall;
+                const fnType = ann._constructorCall.fnType;
+                let structName = "unknown";
+                const thisParamType = fnType.parameters[0];
+                if (thisParamType && thisParamType.type instanceof type_checker_cjs_1.TypeSystem.PointerType) {
+                    const structType = thisParamType.type.points_to.type;
+                    if (structType instanceof type_checker_cjs_1.TypeSystem.StructType)
+                        structName = structType.name;
+                    else if (structType.name)
+                        structName = structType.name;
+                    if (structName.includes("*"))
+                        structName = structName.replace("*", "");
+                }
+                const mangledName = this.get_mangled_method_name(ctor_node, structName);
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                const argsList = args;
+                const sysv_regs = ['rdi', 'rsi', 'rdx', 'rcx', 'r8', 'r9'];
+                const total_args = argsList.length + 1; // +1 for 'this'
+                const extra_args = Math.max(0, total_args - sysv_regs.length);
+                const stack_slots = extra_args * 8;
+                // Size of the temporary structure
+                const struct_size = ann.resolvedType ? this.qual_type_size(ann.resolvedType) : 16;
+                const alloc_struct_size = this.align_up(struct_size, 16);
+                const padding = (16 - (stack_slots % 16)) % 16;
+                // 1. Allocate the structure on the stack
+                this.hwm.clearSource();
+                this.hwm.compile('sub', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(alloc_struct_size)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                // Save the address of the structure (this) in r10
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('r10'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                if (padding > 0) {
+                    this.hwm.clearSource();
+                    this.hwm.compile('sub', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(padding)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                // 2. Arguments from right to left
+                for (let i = argsList.length - 1; i >= 0; i--) {
+                    const argRes = this.compile_expr_to_reg(argsList[i], 'rax', frame);
+                    for (const r of argRes.relocs)
+                        relocs.push({ ...r, offset: r.offset + buf.length });
+                    buf = Buffer.concat([buf, argRes.buffer]);
+                    this.hwm.clearSource();
+                    this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                // Push 'this'
+                this.hwm.clearSource();
+                this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('r10')]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                // Pop into SysV registers
+                const regs_to_pop = Math.min(total_args, sysv_regs.length);
+                for (let i = 0; i < regs_to_pop; i++) {
+                    this.hwm.clearSource();
+                    this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sysv_regs[i])]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                // 3. Constructor call
+                if (!this.fnMap.has(mangledName)) {
+                    this.hwc.requireSymbol(mangledName);
+                }
+                const callBuf = Buffer.from([0xe8, 0x00, 0x00, 0x00, 0x00]);
+                relocs.push({ section: '.text', offset: buf.length + 1, type: 2, symbolName: mangledName, addend: 0, _deferred: true });
+                buf = Buffer.concat([buf, callBuf]);
+                // Remove arguments from the stack
+                const cleanup_size = padding + stack_slots;
+                if (cleanup_size > 0) {
+                    this.hwm.clearSource();
+                    this.hwm.compile('add', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(cleanup_size)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                // 4. Return the result
+                if (struct_size > 8) {
+                    // For structs larger than 8 bytes (e.g., `optional`), we return the ADDRESS in the requested register. 
+                    // ⚡ We do NOT free the memory! The caller (e.g., `return`, assignment) will copy
+                    // the data at this address and handle the `add rsp` itself!
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(reg_name),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp')
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                else {
+                    // For primitives (<= 8 bytes), return the VALUE.
+                    this.hwm.clearSource();
+                    const dst_sub = this.get_sub_register(reg_name, struct_size);
+                    this.hwm.compile('mov', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dst_sub),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: struct_size, base: 'rsp', displacement: 0 })
+                    ]);
+                    // Immediately free the memory, as the value has already been safely copied to a register.
+                    this.hwm.compile('add', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(alloc_struct_size)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                if (reg_name !== 'rax') {
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(reg_name),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                return { buffer: buf, relocs };
+            }
+            const elements = node.elements ?? [];
+            if (elements.length === 0)
+                return { buffer: Buffer.alloc(0), relocs: [] };
+            if (elements.length === 1) {
+                return this.compile_expr_to_reg(elements[0], reg_name, frame);
+            }
+            let buf = Buffer.alloc(0);
+            const rels = [];
+            for (const elem of elements) {
+                const r = this.compile_expr_to_reg(elem, reg_name, frame);
+                for (const rel of r.relocs)
+                    rels.push({ ...r, offset: rel.offset + buf.length });
+                buf = Buffer.concat([buf, r.buffer]);
+            }
+            return { buffer: buf, relocs: rels };
+        }
+        // 2. Handling function/method calls as expressions (e.g., return foo();)
+        if (node.kind === expression_cjs_1.Syntax.Kind.Call) {
+            const call_res = this.compile_hl_call_statement(node, frame);
+            let buf = call_res.buffer;
+            if (reg_name !== 'rax') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            return { buffer: buf, relocs: call_res.relocs };
+        }
+        // 3. Array Indexing
+        if (node.kind === expression_cjs_1.Syntax.Kind.SubscriptExpression) {
+            const res = this.compile_subscript_address(node, 'r11', frame);
+            let buf = res.buffer;
+            const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: res.elemSize, base: 'r11', displacement: 0 });
+            this.hwm.clearSource();
+            if (res.elemSize === 1 || res.elemSize === 2) {
+                this.hwm.compile('movzx', [dst_op, src_mem]);
+            }
+            else {
+                const s = this.get_sub_register(reg_name, res.elemSize);
+                this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(s), src_mem]);
+            }
+            return { buffer: Buffer.concat([buf, Buffer.from(this.hwm.getSource())]), relocs: res.relocs };
+        }
+        // 4. Handling `this` (safely loading from the stack)
+        if (node.kind === expression_cjs_1.Syntax.Kind.ThisLiteral) {
+            const local = frame.vars.get("this");
+            if (local) {
+                const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, src_mem]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs: [] };
+            }
+        }
+        // 5. Identifiers (Variables, Fields, this)
+        if (node.kind === expression_cjs_1.Syntax.Kind.Identifier) {
+            // 3a. Field Access (a.b or a->b)
+            if (node.operator && (node.operator.lexem === "." || node.operator.lexem === "->")) {
+                const res = this.compile_lvalue_address(node, 'r11', frame);
+                let buf = res.buffer;
+                const fieldSize = node._fieldSize ?? 8;
+                const sub_reg = this.get_sub_register(reg_name, fieldSize);
+                this.hwm.clearSource();
+                const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: fieldSize, base: 'r11', displacement: 0 });
+                if (fieldSize === 1 || fieldSize === 2)
+                    this.hwm.compile('movzx', [dst_op, src_mem]);
+                else
+                    this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sub_reg), src_mem]);
+                return { buffer: Buffer.concat([buf, Buffer.from(this.hwm.getSource())]), relocs: res.relocs };
+            }
+            // 3b. Variable name
+            const name = ann?._mangledName ?? node._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
+            if (name === 'nullptr') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(0)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            const local = frame.vars.get(name);
+            if (local) {
+                this.hwm.clearSource();
+                const ann = type_resolver_cjs_1.Annotations.get(node);
+                const isSigned = this.is_signed_type(ann?.resolvedType ?? null);
+                const actualSize = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : local.size;
+                if (local._isArray || actualSize > 8) {
+                    // ⚡ FOR STRUCTS > 8 BYTES (vector, optional) AND ARRAYS, RETURN THE ADDRESS (LEA)
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                    this.hwm.compile('lea', [dst_op, src_mem]);
+                }
+                else if (actualSize === 4) {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 4, base: 'rbp', displacement: local.rbp_offset });
+                    if (isSigned && reg_name.startsWith('r') && !reg_name.endsWith('dx')) {
+                        this.hwm.compile('movsxd', [dst_op, src_mem]);
+                    }
+                    else {
+                        const sub32 = this.get_sub_register(reg_name, 4);
+                        this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sub32), src_mem]);
+                    }
+                }
+                else if (actualSize === 1 || actualSize === 2) {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: actualSize, base: 'rbp', displacement: local.rbp_offset });
+                    this.hwm.compile(isSigned ? 'movsx' : 'movzx', [dst_op, src_mem]);
+                }
+                else {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: actualSize, base: 'rbp', displacement: local.rbp_offset });
+                    const s = this.get_sub_register(reg_name, actualSize);
+                    this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(s), src_mem]);
+                }
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs: [] };
+            }
+            // Global variable or function
+            if (this.vartable.has(name)) {
+                const vinfo = this.vartable.get(name);
+                const size = vinfo?.typeSize || 8;
+                const ann = type_resolver_cjs_1.Annotations.get(node);
+                const isSigned = this.is_signed_type(ann?.resolvedType ?? null);
+                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size, ripRelative: true, displacement: 0 });
+                if (size === 4 && isSigned) {
+                    // MOVSXD for signed 32-bit globals
+                    this.hwm.clearSource();
+                    this.hwm.compile('movsxd', [dst_op, mem_op]);
+                }
+                else if (size === 1 || size === 2) {
+                    this.hwm.clearSource();
+                    this.hwm.compile(isSigned ? 'movsx' : 'movzx', [dst_op, mem_op]);
+                }
+                else {
+                    const sub_reg = this.get_sub_register(reg_name, size);
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sub_reg), mem_op]);
+                }
+                const buf = Buffer.from(this.hwm.getSource());
+                const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                return { buffer: buf, relocs: [{ section: '.text', offset: disp >= 0 ? disp : buf.length - 4, type: 2, symbolName: name, addend: -4 }] };
+            }
+        }
+        // 6. Address (&)
+        if (node.kind === expression_cjs_1.Syntax.Kind.UnaryExpression && (node.operator?.lexem === '&' || node.operator?.type === token_cjs_1.Token.AMPERSAND)) {
+            const operand = node.operand;
+            // &var
+            if (operand.kind === expression_cjs_1.Syntax.Kind.Identifier && !operand.operator) {
+                const name = unwrap_cjs_1.UnwrapSyntax.unwrap(operand).raw;
+                const local = frame.vars.get(name);
+                if (local) {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, src_mem]);
+                    return { buffer: Buffer.from(this.hwm.getSource()), relocs: [] };
+                }
+                else {
+                    const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, mem_op]);
+                    const buf = Buffer.from(this.hwm.getSource());
+                    const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                    return { buffer: buf, relocs: [{ section: '.text', offset: disp >= 0 ? disp : buf.length - 4, type: 2, symbolName: name, addend: 0 }] };
+                }
+            }
+            // &a.b -> calculate the address of the field
+            if (operand.operator)
+                return this.compile_lvalue_address(operand, reg_name, frame);
+        }
+        // 7. Unary expressions: -x  !x  ++x  x++  --x  x--
+        if (node.kind === expression_cjs_1.Syntax.Kind.UnaryExpression) {
+            const is = (t, k) => {
+                return unwrap_cjs_1.UnwrapSyntax.Operator.is(t, k);
+            };
+            const OperatorKind = unwrap_cjs_1.UnwrapSyntax.Operator.Kind;
+            const isPostfix = node.isPostfix;
+            const operand = node.operand;
+            if (is(node.operator, OperatorKind.MINUS)) {
+                const res = this.compile_expr_to_reg(operand, 'rax', frame);
+                let buf = res.buffer;
+                // Determining the Size of a Type
+                const opAnn = type_resolver_cjs_1.Annotations.get(node);
+                const opSize = opAnn?.resolvedType ? this.qual_type_size(opAnn.resolvedType) : 8;
+                const subReg = this.get_sub_register('rax', opSize);
+                this.hwm.clearSource();
+                this.hwm.compile('neg', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(subReg)]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                // If the value needs to be returned to another register, use the same size!
+                if (reg_name !== 'rax') {
+                    const dstSubReg = this.get_sub_register(reg_name, opSize);
+                    // ⚡ IMPORTANT: Both operands are of the same size!
+                    const dstOp = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dstSubReg);
+                    const srcOp = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(subReg);
+                    if (!dstOp || !srcOp) {
+                        new exceptions.ExpressionException(`Failed to parse registers for mov: dst='${dstSubReg}', src='${subReg}'`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+                        return { buffer: buf, relocs: res.relocs };
+                    }
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [dstOp, srcOp]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                return { buffer: buf, relocs: res.relocs };
+            }
+            /**
+             * Logical NOT: !x ->
+             * cmp $0x00, %rax;
+             * sete %al;
+             * movzx %al, %rax;
+             */
+            if (is(node.operator, OperatorKind.BANG)) {
+                const res = this.compile_expr_to_reg(operand, 'rax', frame);
+                let buf = res.buffer;
+                buf = Buffer.concat([buf, Buffer.from([0x48, 0x83, 0xF8, 0x00])]); // cmp $0x00, %rax;
+                buf = Buffer.concat([buf, Buffer.from([0x0F, 0x94, 0xC0])]); // sete %al;
+                buf = Buffer.concat([buf, Buffer.from([0x48, 0x0F, 0xB6, 0xC0])]); // movzx %al, %rax;
+                if (reg_name !== 'rax') {
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [
+                        dst_op,
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                return { buffer: buf, relocs: res.relocs };
+            }
+            // ++x / x++ / --x / x--
+            const isInc = is(node.operator, OperatorKind.INCREMENT);
+            const isDec = is(node.operator, OperatorKind.DECREMENT);
+            if (isInc || isDec) {
+                const addrRes = this.compile_lvalue_address(operand, 'r11', frame);
+                let buf = addrRes.buffer;
+                const rels = [...addrRes.relocs];
+                const opAnn = type_resolver_cjs_1.Annotations.get(operand);
+                const opSize = opAnn?.resolvedType ? this.qual_type_size(opAnn.resolvedType) : 8;
+                const raxSub = this.get_sub_register('rax', opSize);
+                const memOp = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: opSize, base: 'r11', displacement: 0 });
+                const raxOp = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub);
+                const raxFull = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax');
+                if (isPostfix) {
+                    // Postfix: read old value → save → increment → return old value.
+                    this.hwm.clearSource();
+                    if (opSize === 1 || opSize === 2)
+                        this.hwm.compile('movzx', [raxFull, memOp]);
+                    else
+                        this.hwm.compile('mov', [raxOp, memOp]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    this.hwm.clearSource();
+                    this.hwm.compile('push', [raxFull]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    this.hwm.clearSource();
+                    this.hwm.compile(isInc ? 'inc' : 'dec', [memOp]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    this.hwm.clearSource();
+                    this.hwm.compile('pop', [raxFull]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                else {
+                    // Prefix: increment → read new value
+                    this.hwm.clearSource();
+                    this.hwm.compile(isInc ? 'inc' : 'dec', [memOp]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    this.hwm.clearSource();
+                    if (opSize === 1 || opSize === 2)
+                        this.hwm.compile('movzx', [raxFull, memOp]);
+                    else
+                        this.hwm.compile('mov', [raxOp, memOp]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                if (reg_name !== 'rax') {
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [dst_op, raxFull]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                return { buffer: buf, relocs: rels };
+            }
+            // throw
+        }
+        // 8. Binary Operations (Assignment, Arithmetic, Logic)
+        if (node.kind === expression_cjs_1.Syntax.Kind.BinaryExpression) {
+            const binNode = node;
+            const op = binNode.operator?.lexem ?? binNode.operator;
+            if (op === '=') {
+                return this.compile_assignment_stmt(node, frame);
+            }
+            const leftInfo = this.get_operand_info(binNode.left, frame);
+            const rightInfo = this.get_operand_info(binNode.right, frame);
+            let opSize = Math.max(leftInfo.size, rightInfo.size);
+            // Integer promotion: promote everything to 4 bytes (except for logical && and ||)
+            if (opSize < 4 && !['&&', '||'].includes(op))
+                opSize = 4;
+            const isSignedOp = leftInfo.isSigned || rightInfo.isSigned;
+            const isUnsigned = !isSignedOp;
+            const raxSub = this.get_sub_register('rax', opSize);
+            const rcxSub = this.get_sub_register('rcx', opSize);
+            const leftRes = this.compile_expr_to_reg(binNode.left, 'rax', frame);
+            let buf = leftRes.buffer;
+            const rels = leftRes.relocs;
+            this.hwm.clearSource();
+            this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            const rightRes = this.compile_expr_to_reg(binNode.right, 'rcx', frame);
+            for (const r of rightRes.relocs)
+                rels.push({ ...r, offset: r.offset + buf.length });
+            buf = Buffer.concat([buf, rightRes.buffer]);
+            this.hwm.clearSource();
+            this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            if (['+', '-', '*'].includes(op)) {
+                const mnemonic = op === '+' ? 'add' : op === '-' ? 'sub' : (isSignedOp ? 'imul' : 'mul');
+                this.hwm.clearSource();
+                this.hwm.compile(mnemonic, [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcxSub)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            else if (['/', '%'].includes(op)) {
+                if (isSignedOp) {
+                    if (opSize === 8)
+                        buf = Buffer.concat([buf, Buffer.from([0x48, 0x99])]); // cqto (AT&T) == cqo (Intel)
+                    else if (opSize === 4)
+                        buf = Buffer.concat([buf, Buffer.from([0x99])]); // cltd (AT&T) == cdq (Intel)
+                    else if (opSize === 2)
+                        buf = Buffer.concat([buf, Buffer.from([0x66, 0x99])]); // cwtd (AT&T) == cwd (Intel)
+                    else if (opSize === 1)
+                        buf = Buffer.concat([buf, Buffer.from([0x98])]); // cwtl (AT&T) == cbw (Intel)
+                }
+                else {
+                    buf = Buffer.concat([buf, Buffer.from([0x48, 0x31, 0xD2])]); // xor %rdx, %rdx
+                }
+                this.hwm.clearSource();
+                this.hwm.compile(isSignedOp ? 'idiv' : 'div', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcxSub)]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                if (op === '%') {
+                    // In x86, the remainder is always placed in RDX/EDX.
+                    const rdxSub = this.get_sub_register('rdx', opSize);
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rdxSub)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+            }
+            else if (op === '&&') {
+                buf = Buffer.concat([buf, Buffer.from([
+                        0x48, 0x83, 0xF8, 0x00, // cmp    $0x0,%rax
+                        0x0F, 0x95, 0xC0, // setne  %al
+                        0x48, 0x0F, 0xB6, 0xC0 // movzbq %al,%rax
+                    ])]);
+                buf = Buffer.concat([buf, Buffer.from([
+                        0x48, 0x83, 0xF9, 0x00, // cmp    $0x0,%rcx
+                        0x0F, 0x95, 0xC1, // setne  %cl
+                        0x48, 0x0F, 0xB6, 0xC9 // movzbq %cl,%rcx
+                    ])]);
+                this.hwm.clearSource();
+                this.hwm.compile('and', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            else if (op === '||') {
+                this.hwm.clearSource();
+                this.hwm.compile('or', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                buf = Buffer.concat([buf, Buffer.from([
+                        0x48, 0x83, 0xF8, 0x00, // cmp    $0x0,%rax
+                        0x0F, 0x95, 0xC0, // setne  %al
+                        0x48, 0x0F, 0xB6, 0xC0 // movzbq %al,%rax
+                    ])]);
+            }
+            else if (['==', '!=', '>', '<', '>=', '<='].includes(op)) {
+                buf = Buffer.concat([buf, Buffer.from([0x4D, 0x31, 0xC0])]); // xor %r8, %r8
+                this.hwm.clearSource();
+                this.hwm.compile('cmp', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcxSub)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                const setccOpcodes = {
+                    '==': [0x41, 0x0F, 0x94, 0xC0], // sete     %r8b
+                    '!=': [0x41, 0x0F, 0x95, 0xC0], // setne    %r8b
+                    '<': isUnsigned ? [0x41, 0x0F, 0x92, 0xC0] /* setb    %r8b */ : [0x41, 0x0F, 0x9C, 0xC0] /* setl    %r8b */,
+                    '>=': isUnsigned ? [0x41, 0x0F, 0x93, 0xC0] /* setae   %r8b */ : [0x41, 0x0F, 0x9D, 0xC0] /* setge   %r8b */,
+                    '<=': isUnsigned ? [0x41, 0x0F, 0x96, 0xC0] /* setbe   %r8b */ : [0x41, 0x0F, 0x9E, 0xC0] /* setle   %r8b */,
+                    '>': isUnsigned ? [0x41, 0x0F, 0x97, 0xC0] /* seta    %r8b */ : [0x41, 0x0F, 0x9F, 0xC0] /* setg    %r8b */,
+                };
+                buf = Buffer.concat([buf, Buffer.from(setccOpcodes[op])]);
+                buf = Buffer.concat([buf, Buffer.from([0x4C, 0x89, 0xC0])]); // mov %r8, %rax
+            }
+            if (reg_name !== 'rax') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(reg_name),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            return { buffer: buf, relocs: rels };
+        }
+        // 9. Safe literal processing (with a fallback if Annotations are unavailable)
+        if (node.kind === expression_cjs_1.Syntax.Kind.Literal) {
+            const ann = type_resolver_cjs_1.Annotations.get(node);
+            // a. Integer constant: int32_t a = 3;
+            if (ann?.constValue?.kind === 'integer') {
+                const val = Number(ann.constValue.value);
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(val)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            // b. bool: true/false
+            if (ann?.constValue?.kind === 'bool') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(ann.constValue.value ? 1 : 0)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            // c. nullptr: const T* p = nullptr;
+            //   → mov rax, 0   (zero-extends; store side uses get_sub_register for exact size)
+            if (ann?.constValue?.kind === 'nullptr' || node.type === expression_cjs_1.Syntax.Type.NullptrLiteral) {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(0)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            // d. String literal: const char* s = "hello";
+            //   → intern string in .rodata as .Lstr.N
+            //   → lea rax, [rip + .Lstr.N]   + R_X86_64_PC32 reloc
+            if (ann?.constValue?.kind === 'string') {
+                const label = this.intern_string_literal(ann.constValue.value);
+                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                this.hwm.clearSource();
+                this.hwm.compile('lea', [dst_op, mem_op]);
+                const buf = Buffer.from(this.hwm.getSource());
+                const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                relocs.push({
+                    section: '.text',
+                    offset: disp >= 0 ? disp : buf.length - 4,
+                    type: 2, // R_X86_64_PC32
+                    symbolName: label,
+                    addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
+                    _deferred: true,
+                });
+                return { buffer: buf, relocs };
+            }
+            // e. Fallback: if no annotations are present, simply take the raw number from the AST.
+            const raw_val = unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
+            const num = Number(raw_val);
+            if (!isNaN(num)) {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(num)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            // f. Fallback for string literals when annotations are not present.
+            // f. Char literal fallback: 'a' → mov dst, 97
+            //     Handles single-char and simple escape sequences (\n \t \r \0 \\ \')
+            if (typeof raw_val === 'string' && raw_val.length >= 3 &&
+                raw_val.startsWith("'") && raw_val.endsWith("'")) {
+                const ch_content = raw_val.slice(1, -1);
+                let char_val = 0;
+                if (ch_content.length === 1) {
+                    char_val = ch_content.charCodeAt(0);
+                }
+                else if (ch_content.startsWith('\\') && ch_content.length === 2) {
+                    const esc = { n: 10, t: 9, r: 13, '0': 0, '\\': 92, "'": 39, '"': 34, 'a': 7, 'b': 8 };
+                    char_val = esc[ch_content[1]] ?? 0;
+                }
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(char_val)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            // g. Fallback for string literals when annotations are not present
+            //     (strings within the function body are not annotated by the type_resolver—only those in @section)
+            //     raw_val = '"hello\\n"'  →  slice(1,-1) = 'hello\\n'  →  intern escapes it
+            if (typeof raw_val === 'string' && raw_val.length >= 2 &&
+                raw_val.startsWith('"') && raw_val.endsWith('"')) {
+                const str_content = raw_val.slice(1, -1);
+                const label = this.intern_string_literal(str_content);
+                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                this.hwm.clearSource();
+                this.hwm.compile('lea', [dst_op, mem_op]);
+                const buf = Buffer.from(this.hwm.getSource());
+                const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                relocs.push({
+                    section: '.text',
+                    offset: disp >= 0 ? disp : buf.length - 4,
+                    type: 2,
+                    symbolName: label,
+                    addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4,
+                    _deferred: true,
+                });
+                return { buffer: buf, relocs };
+            }
+        }
+        // Fallback for Assembly operands ($1, %rax)
+        const parsed = operand_parser_cjs_1.OperandParser.parse(node);
+        if (parsed) {
+            if (parsed.type === 'register') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(parsed.name)]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            if (parsed.type === 'immediate') {
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(Number(parsed.value))]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            if (parsed.type === 'variable_address') {
+                const local = frame.vars.get(parsed.address);
+                if (local) {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, src_mem]);
+                    return { buffer: Buffer.from(this.hwm.getSource()), relocs: [] };
+                }
+                else {
+                    const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, mem_op]);
+                    const buf = Buffer.from(this.hwm.getSource());
+                    const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                    return { buffer: buf, relocs: [{ section: '.text', offset: disp >= 0 ? disp : buf.length - 4, type: 2, symbolName: parsed.address, addend: 0 }] };
+                }
+            }
+        }
+        return { buffer: Buffer.alloc(0), relocs };
+    }
+    /**
+    * A universal method for computing the address of an LValue into a target register.
+    * Returns a buffer containing the instructions. The result is always a pointer (address) within `dest_reg`.
+    */
+    compile_lvalue_address(node, dest_reg, frame) {
+        const dst_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dest_reg);
+        const relocs = [];
+        let buf = Buffer.alloc(0);
+        // 1. Identifiers
+        if (node.kind === expression_cjs_1.Syntax.Kind.Identifier) {
+            const op = node.operator?.lexem;
+            // 1a. Access to the structure field a.b or a->b
+            if (op === "." || op === "->") {
+                const offset = node._fieldOffset ?? 0;
+                if (op === ".") {
+                    // We take the parent's address.
+                    const baseRes = this.compile_lvalue_address(node.selector, dest_reg, frame);
+                    buf = Buffer.concat([buf, baseRes.buffer]);
+                    relocs.push(...baseRes.relocs);
+                }
+                else if (op === "->") {
+                    // We calculate the pointer value (which is, in fact, the address of the structure).
+                    const baseRes = this.compile_expr_to_reg(node.selector, dest_reg, frame);
+                    buf = Buffer.concat([buf, baseRes.buffer]);
+                    relocs.push(...baseRes.relocs);
+                }
+                // Add the field offset: add dest_reg, offset
+                if (offset > 0) {
+                    this.hwm.clearSource();
+                    this.hwm.compile('add', [dst_op, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(offset)]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                return { buffer: buf, relocs };
+            }
+            // 1b. A regular variable, or a global variable with a namespace (::)
+            const ann = type_resolver_cjs_1.Annotations.get(node);
+            const name = ann?._mangledName ?? node._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
+            const local = frame.vars.get(name);
+            if (local) {
+                // Local: lea dest, [rbp - offset]
+                const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                this.hwm.clearSource();
+                this.hwm.compile('lea', [dst_op, src_mem]);
+                return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+            }
+            else if (this.vartable.has(name)) {
+                // Global: lea dest, [rip + sym]
+                const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                this.hwm.clearSource();
+                this.hwm.compile('lea', [dst_op, mem_op]);
+                buf = Buffer.from(this.hwm.getSource());
+                const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                relocs.push({ section: '.text', offset: disp >= 0 ? disp : buf.length - 4, type: 2, symbolName: name, addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4, _deferred: true });
+                return { buffer: buf, relocs };
+            }
+        }
+        // 2. Access to array element arr[i]
+        if (node.kind === expression_cjs_1.Syntax.Kind.SubscriptExpression) {
+            // Use the method you have already written, but place the returned address into dest_reg.
+            const res = this.compile_subscript_address(node, dest_reg, frame);
+            return { buffer: res.buffer, relocs: res.relocs };
+        }
+        // 3. Dereferencing the pointer *ptr
+        if (node.kind === expression_cjs_1.Syntax.Kind.UnaryExpression && node.operator?.type === token_cjs_1.Token.STAR) {
+            // Адресом для *ptr является само значение ptr
+            return this.compile_expr_to_reg(node.operand, dest_reg, frame);
+        }
+        // 4. A hack for declaring a function pointer (it is parsed as a Call within an assignment).
+        if (node.kind === expression_cjs_1.Syntax.Kind.Call) {
+            const fnPtrName = this.extract_fn_ptr_name(node);
+            if (fnPtrName) {
+                const local = frame.vars.get(fnPtrName);
+                if (local) {
+                    const src_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, src_mem]);
+                    return { buffer: Buffer.from(this.hwm.getSource()), relocs };
+                }
+                else if (this.vartable.has(fnPtrName)) {
+                    const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, ripRelative: true, displacement: 0 });
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [dst_op, mem_op]);
+                    buf = Buffer.from(this.hwm.getSource());
+                    const disp = buf.indexOf(Buffer.from([0, 0, 0, 0]));
+                    relocs.push({ section: '.text', offset: disp >= 0 ? disp : buf.length - 4, type: 2, symbolName: fnPtrName, addend: this.targetFormat === header_cjs_1.OutputFormat.EXEC_ELF64 ? 0 : -4, _deferred: true });
+                    return { buffer: buf, relocs };
+                }
+            }
+        }
+        new exceptions.ExpressionException(`Expression is not assignable (not an LValue)`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+        return { buffer: buf, relocs };
+    }
+    /**
+    * Calculates the exact address of an array element: &arr[idx]
+    * Uses r10 and rcx for safe calculation (does not clobber rax!).
+    */
+    compile_subscript_address(subNode, dest_reg, frame) {
+        let buf = Buffer.alloc(0);
+        const relocs = [];
+        const ann = type_resolver_cjs_1.Annotations.get(subNode);
+        const elemSize = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+        // 1. Calculate the base (pointer) directly into r10 (WITHOUT using rax).
+        const baseRes = this.compile_expr_to_reg(subNode.base, 'r10', frame);
+        buf = Buffer.concat([buf, baseRes.buffer]);
+        relocs.push(...baseRes.relocs);
+        // push r10 (save the base address to the stack so that the index calculation does not overwrite it)
+        this.hwm.clearSource();
+        this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('r10')]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        // 2. Calculating index -> rcx
+        const idxRes = this.compile_expr_to_reg(subNode.index, 'rcx', frame);
+        for (const r of idxRes.relocs)
+            relocs.push({ ...r, offset: r.offset + buf.length });
+        buf = Buffer.concat([buf, idxRes.buffer]);
+        // pop r10 (restore the base from the stack into r10)
+        this.hwm.clearSource();
+        this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('r10')]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        // 3. Collecting SIB: lea dest_reg, [r10 + rcx * scale]
+        let scale = elemSize;
+        if (![1, 2, 4, 8].includes(scale))
+            scale = 1;
+        const dest_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dest_reg);
+        const mem_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({
+            size: 8, base: 'r10', index: 'rcx', scale: scale, displacement: 0
+        });
+        this.hwm.clearSource();
+        this.hwm.compile('lea', [dest_op, mem_op]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        return { buffer: buf, relocs, elemSize };
+    }
+    /**
+     * Compile a local variable declaration:
+     *   int32_t x = <init>;
+     * Stack slot already reserved in the frame; we only emit the initializer.
+     * Dead variables (usageCount == 0) are skipped silently.
+     */
+    compile_variable_decl_local(node, frame) {
+        const name = unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+        const local = frame.vars.get(name);
+        if (!local)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        const init = node.initializer;
+        if (!init)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        const ann = type_resolver_cjs_1.Annotations.get(node);
+        const initAnn = type_resolver_cjs_1.Annotations.get(init);
+        let buf = Buffer.alloc(0);
+        const relocs = [];
+        // UNION Constructors
+        if (initAnn?._constructorCall?.isUnion) {
+            const { tag, args } = initAnn._constructorCall;
+            const tagMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 4, base: 'rbp', displacement: local.rbp_offset });
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [tagMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(tag)]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            let currentPayloadOffset = 4;
+            for (const arg of (args || [])) {
+                const argRes = this.compile_expr_to_reg(arg, 'rax', frame);
+                for (const r of argRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, argRes.buffer]);
+                const argTypeAnn = type_resolver_cjs_1.Annotations.get(arg);
+                const argSize = argTypeAnn?.resolvedType ? this.qual_type_size(argTypeAnn.resolvedType) : 8;
+                if (argSize > 8) {
+                    // If the union payload is a large structure
+                    this.hwm.clearSource();
+                    this.hwm.compile('lea', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdi'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset + currentPayloadOffset })
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource()), this.emit_memcpy('rdi', 'rax', argSize)]);
+                }
+                else {
+                    const payloadMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: argSize, base: 'rbp', displacement: local.rbp_offset + currentPayloadOffset });
+                    const raxSub = this.get_sub_register('rax', argSize);
+                    this.hwm.clearSource();
+                    this.hwm.compile('mov', [payloadMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub)]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+                currentPayloadOffset += argSize;
+            }
+            return { buffer: buf, relocs };
+        }
+        // Invoking the Constructor via { } (RVO in Action)
+        if (ann?._constructorCall && local) {
+            const { node: ctor_node, args } = ann._constructorCall;
+            const fnType = ann._constructorCall.fnType;
+            let structName = "unknown";
+            if (fnType.parameters[0] && fnType.parameters[0].type instanceof type_checker_cjs_1.TypeSystem.PointerType) {
+                const structType = fnType.parameters[0].type.points_to.type;
+                if (structType instanceof type_checker_cjs_1.TypeSystem.StructType)
+                    structName = structType.name;
+                else if (structType.name)
+                    structName = structType.name;
+                structName = structName.replace("*", "");
+            }
+            const mangledName = this.get_mangled_method_name(ctor_node, structName);
+            const argsList = args;
+            const sysv_regs = ['rdi', 'rsi', 'rdx', 'rcx', 'r8', 'r9'];
+            const total_args = argsList.length + 1; // +1 для 'this'
+            const extra_args = Math.max(0, total_args - sysv_regs.length);
+            const padding = (16 - ((extra_args * 8) % 16)) % 16;
+            if (padding > 0) {
+                this.hwm.clearSource();
+                this.hwm.compile('sub', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'), main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(padding)]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            for (let i = argsList.length - 1; i >= 0; i--) {
+                const argRes = this.compile_expr_to_reg(argsList[i], 'rax', frame);
+                for (const r of argRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, argRes.buffer]);
+                this.hwm.clearSource();
+                this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            // ⚡ RVO: We push the address of the *local variable itself* as `this`! The constructor will build the object directly inside it.
+            this.hwm.clearSource();
+            this.hwm.compile('lea', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset })
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            this.hwm.clearSource();
+            this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            const regs_to_pop = Math.min(total_args, sysv_regs.length);
+            for (let i = 0; i < regs_to_pop; i++) {
+                this.hwm.clearSource();
+                this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sysv_regs[i])]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            if (!this.fnMap.has(mangledName))
+                this.hwc.requireSymbol(mangledName);
+            const callBuf = Buffer.from([0xe8, 0x00, 0x00, 0x00, 0x00]);
+            relocs.push({ section: '.text', offset: buf.length + 1, type: 2, symbolName: mangledName, addend: 0, _deferred: true });
+            buf = Buffer.concat([buf, callBuf]);
+            const cleanup_size = padding + (extra_args * 8);
+            if (cleanup_size > 0) {
+                this.hwm.clearSource();
+                this.hwm.compile('add', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'), main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(cleanup_size)]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            return { buffer: buf, relocs };
+        }
+        // === Standard Initialization and Copying of Large Structures ===
+        const { buffer: load_buf, relocs: load_relocs } = this.compile_expr_to_reg(init, 'rax', frame);
+        if (load_buf.length === 0)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        buf = Buffer.concat([buf, load_buf]);
+        relocs.push(...load_relocs);
+        if (local.size > 8) {
+            // ⚡ HARDWARE COPY (Memcpy)
+            // expr_to_reg returned the ADDRESS of the source temporary structure to us in %rax
+            this.hwm.clearSource();
+            this.hwm.compile('lea', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdi'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: local.rbp_offset })
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            buf = Buffer.concat([buf, this.emit_memcpy('rdi', 'rax', local.size)]);
+            // ⚡ CLEARING TEMPORARY MEMORY (to prevent stack leaks)
+            if (init.kind === expression_cjs_1.Syntax.Kind.Call || (init.kind === expression_cjs_1.Syntax.Kind.List && init.type === expression_cjs_1.Syntax.Type.Initializer)) {
+                const tempAllocSize = this.align_up(local.size, 16);
+                this.hwm.clearSource();
+                this.hwm.compile('add', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(tempAllocSize)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+        }
+        else {
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: local.size, base: 'rbp', displacement: local.rbp_offset }),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(this.get_sub_register('rax', local.size))
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        return { buffer: buf, relocs };
+    }
+    /**
+     * Emits a top-level variable: either into .data/.rodata (initialized) or .bss (uninitialized).
+    */
+    compile_global_variable_declaration(node) {
+        const ann = type_resolver_cjs_1.Annotations.get(node);
+        const name = ann?._mangledName ?? node._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+        if (this.vartable.has(name)) {
+            new exceptions.ExpressionException(`Redefinition of '${name}'`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node.name));
+            return;
+        }
+        const qt = ann?.resolvedType ?? null;
+        const size = qt ? this.qual_type_size(qt) : 8;
+        if (node.initializer) {
+            // Constant initializer — if annotator folded it, use constValue
+            const constValue = ann?.constValue;
+            if (constValue) {
+                const buf = this.serialize_const_value(constValue, qt ?? new type_checker_cjs_1.TypeSystem.QualType(type_checker_cjs_1.TypeSystem.TypeKind.Pointer, type_checker_cjs_1.TypeSystem.TypeTable.getInstance().lookup(type_checker_cjs_1.TypeSystem.PrimitiveTypeEnumeration.NULLPTR), type_checker_cjs_1.TypeSystem.NO_CV));
+                // pick .rodata if const and pointer-to-char string etc, otherwise .data
+                const section = (qt && qt.is_const && constValue.kind === 'string') ? 'rodata' : 'data';
+                const modifiers = (node.modifiers ?? []).map((m) => (m.lexem ?? unwrap_cjs_1.UnwrapSyntax.unwrap(m).raw));
+                const is_static = modifiers.includes('static');
+                const visibility = is_static ? header_cjs_1.SYMBOL_TYPE_BIND.STB_LOCAL : header_cjs_1.SYMBOL_TYPE_BIND.STB_GLOBAL;
+                const data = buf;
+                this.hwc.addVariable(section === 'rodata' ? header_cjs_1.rwLockVar.READ : header_cjs_1.rwLockVar.WRITE, name, data, visibility);
+                this.vartable.set(name, { type: qt ? qt.toString() : 'unknown', section, size: buf.length, contentLength: buf.length, typeSize: size });
+                return;
+            }
+            else {
+                // console.log(node, ann, constValue, name);
+                // Non-constexpr initializer: evaluate in .data by compiling a constant?
+                // For simplicity: evaluate initializer at compile-time via analyzer; if not constant -> error for now.
+                // const rhs_qt = this.visit_top_level_initializer(node.initializer); // optional helper, or throw
+                // Fallback: put in .data zero-initialized? For correctness prefer errors.
+                new exceptions.ExpressionException(`Global initializer for '${name}' must be a compile-time constant`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+                return;
+            }
+        }
+        else {
+            // no initializer -> put into .bss (zero-initialized)
+            this.hwc.ensureSection('.bss', header_cjs_1.TYPE_SECTION.SHT_NOBITS, header_cjs_1.SECTION_FLAGS.SHF_ALLOC | header_cjs_1.SECTION_FLAGS.SHF_WRITE, Math.max(8, size));
+            // add symbol (size information) to .bss — HardwareCompiler API in your project probably has helper; as an example:
+            const zeroBuf = Buffer.alloc(size, 0);
+            this.hwc.addVariable(header_cjs_1.rwLockVar.WRITE, name, zeroBuf, header_cjs_1.SYMBOL_TYPE_BIND.STB_GLOBAL); // if addVariable supports SHT_NOBITS, adjust accordingly
+            this.vartable.set(name, {
+                type: qt ? qt.toString() : 'unknown',
+                section: 'bss',
+                size,
+                contentLength: 0,
+                typeSize: size
+            });
+            return;
+        }
+    }
+    get_operand_info(node, frame) {
+        if (!node)
+            return { size: 8, isSigned: false };
+        if (node.kind === expression_cjs_1.Syntax.Kind.List && node.elements?.length === 1) {
+            return this.get_operand_info(node.elements[0], frame);
+        }
+        const ann = type_resolver_cjs_1.Annotations.get(node);
+        if (ann?.resolvedType) {
+            return {
+                size: this.qual_type_size(ann.resolvedType),
+                isSigned: this.is_signed_type(ann.resolvedType)
+            };
+        }
+        // Fallback: If the semantic analyzer missed a node, infer it based on the frame.
+        if (node.kind === expression_cjs_1.Syntax.Kind.Identifier) {
+            const name = unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
+            const local = frame.vars.get(name);
+            if (local)
+                return { size: local.size, isSigned: local.size === 4 || local.size === 2 || local.size === 1 };
+            const global = this.vartable.get(name);
+            if (global)
+                return { size: global.typeSize || 8, isSigned: global.typeSize === 4 };
+        }
+        if (node.kind === expression_cjs_1.Syntax.Kind.Literal) {
+            if (node.type === expression_cjs_1.Syntax.Type.NumberLieral)
+                return { size: 4, isSigned: true }; // int32_t по умолчанию
+            if (node.type === expression_cjs_1.Syntax.Type.BooleanLiteral)
+                return { size: 1, isSigned: false };
+            if (node.type === expression_cjs_1.Syntax.Type.StringLiteral)
+                return { size: 8, isSigned: false };
+        }
+        return { size: 8, isSigned: false };
+    }
+    /**
+     * Compile an assignment statement inside a function:
+     *   x = <rhs>;
+     * Supports:
+     *   - local variable assignment (existing behavior)
+     *   - struct field assignment (a.b, a->b)
+     *   - compound assignment (+=, -=) for both locals and fields (basic set: +=, -=)
+     */
+    compile_assignment_stmt(node, frame) {
+        const lhs = node.left ?? node.lhs;
+        const rhs = node.right ?? node.rhs;
+        const op = node.operator?.lexem ?? node.operator;
+        if (!lhs || !rhs)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        let buf = Buffer.alloc(0);
+        const relocs = [];
+        const rhsAnn = type_resolver_cjs_1.Annotations.get(rhs);
+        if (rhsAnn?._constructorCall?.isUnion && op === "=") {
+            // 1. Calculating LHS address -> r10
+            const lhsAddrRes = this.compile_lvalue_address(lhs, 'r10', frame);
+            buf = Buffer.concat([buf, lhsAddrRes.buffer]);
+            relocs.push(...lhsAddrRes.relocs);
+            const { tag, args } = rhsAnn._constructorCall;
+            // 2. Write a tag (offset = 0)
+            const tagMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 4, base: 'r10', displacement: 0 });
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [tagMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(tag)]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            // 3. Writing arguments (offset = 4+)
+            let currentPayloadOffset = 4;
+            const argsList = (args || []);
+            for (const arg of argsList) {
+                const argRes = this.compile_expr_to_reg(arg, 'rax', frame);
+                for (const r of argRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, argRes.buffer]);
+                const argTypeAnn = type_resolver_cjs_1.Annotations.get(arg);
+                const argSize = argTypeAnn?.resolvedType ? this.qual_type_size(argTypeAnn.resolvedType) : 8;
+                const payloadMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: argSize, base: 'r10', displacement: currentPayloadOffset });
+                const raxSub = this.get_sub_register('rax', argSize);
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [payloadMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(raxSub)]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                currentPayloadOffset += argSize;
+            }
+            return { buffer: buf, relocs };
+        }
+        // LHS size (based on annotations) — used for selecting sub-register / movzx.
+        const ann = type_resolver_cjs_1.Annotations.get(lhs);
+        const lhsSize = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+        // 1) Compile the RHS into %rcx (universally: whether the RHS is a function, string, nullptr, expression, etc.)
+        const rhsRes = this.compile_expr_to_reg(rhs, 'rcx', frame);
+        buf = Buffer.concat([buf, rhsRes.buffer]);
+        relocs.push(...rhsRes.relocs);
+        // 2) Save RCX (RHS) to the stack, since calculating the LHS address may use registers.
+        this.hwm.clearSource();
+        this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx')]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        // 3) We compute the LHS address in r10 (a universal method supporting identifiers, 
+        //    struct fields, arr[idx], as well as Call(...) for function pointers).
+        const lhsAddrRes = this.compile_lvalue_address(lhs, 'r10', frame);
+        // Adjusting relocation offsets (they are relative to the current buffer).
+        for (const r of lhsAddrRes.relocs)
+            relocs.push({ ...r, offset: r.offset + buf.length });
+        buf = Buffer.concat([buf, lhsAddrRes.buffer]);
+        // 4) Restore rcx (RHS value) from the stack.
+        this.hwm.clearSource();
+        this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx')]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        // 5) Prepare the destination operand and perform the write / compound assignment.
+        const rcx_sub = this.get_sub_register('rcx', lhsSize);
+        const rcx_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcx_sub);
+        const r10_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: lhsSize, base: 'r10', displacement: 0 });
+        if (op === "=") {
+            if (lhsSize > 8) {
+                // RCX holds the source ADDRESS; we copy it into R10 using memcpy.
+                buf = Buffer.concat([buf, this.emit_memcpy('r10', 'rcx', lhsSize)]);
+                // ⚡ Clearing Temporary Memory
+                if (rhs.kind === expression_cjs_1.Syntax.Kind.Call || (rhs.kind === expression_cjs_1.Syntax.Kind.List && rhs.type === expression_cjs_1.Syntax.Type.Initializer)) {
+                    const tempAllocSize = this.align_up(lhsSize, 16);
+                    this.hwm.clearSource();
+                    this.hwm.compile('add', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(tempAllocSize)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                }
+            }
+            else {
+                // Simple assignment of a primitive: mov [r10], rcx
+                const rcx_sub = this.get_sub_register('rcx', lhsSize);
+                const rcx_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcx_sub);
+                const r10_mem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: lhsSize, base: 'r10', displacement: 0 });
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [r10_mem, rcx_op]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+        }
+        else {
+            // Compound assignment (+=, -=, *=, ...)
+            // First, we read the old value: movzx/mov rax, [r10]
+            this.hwm.clearSource();
+            const rax_sub = this.get_sub_register('rax', lhsSize);
+            const rax_op = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rax_sub);
+            const ann = type_resolver_cjs_1.Annotations.get(lhs);
+            // const isSigned = this.is_signed_type(ann?.resolvedType);
+            const info = this.get_operand_info(lhs, frame);
+            const isSigned = info.isSigned;
+            if (lhsSize === 1 || lhsSize === 2) {
+                this.hwm.compile(isSigned ? 'movsx' : 'movzx', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    r10_mem
+                ]);
+            }
+            else if (lhsSize === 4 && isSigned) {
+                // MOVSXD for signed 32-bit values
+                const status = this.hwm.compile('movsxd', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    r10_mem
+                ]);
+                if (!status.ok) {
+                    new exceptions.ExpressionException(status.error, unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+                }
+            }
+            else {
+                this.hwm.compile('mov', [rax_op, r10_mem]);
+            }
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            // Perform arithmetic: rax = rax OP rcx
+            const mathMnemonic = op === '+=' ? 'add'
+                : op === '-=' ? 'sub'
+                    : op === '*=' ? 'imul'
+                        : op === '/=' ? 'idiv'
+                            : null;
+            if (!this.hwm.hasInstruction(mathMnemonic) || mathMnemonic == null) {
+                new exceptions.ExpressionException(`An internal error occurred while compiling an expression. Unknown operator ${op} in expression`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+            }
+            if (mathMnemonic) {
+                this.hwm.clearSource();
+                this.hwm.compile(mathMnemonic, [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx')
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            }
+            else {
+                new exceptions.ExpressionException(`Unsupported compound assignment operator '${op}'`, unwrap_cjs_1.UnwrapSyntax.get_start_token(node), this.zcc_compiler_warning);
+                return { buffer: Buffer.alloc(0), relocs };
+            }
+            // We write the result back: mov [r10], rax
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [r10_mem, rax_op]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        return { buffer: buf, relocs };
+    }
+    compile_hl_call_statement(node, frame) {
+        const sysv_regs = ['rdi', 'rsi', 'rdx', 'rcx', 'r8', 'r9'];
+        const args = node.parameters ?? [];
+        const fn_caller = node.caller;
+        let is_method = false;
+        let method_base_node = null;
+        let method_operator = "";
+        if (fn_caller.kind === expression_cjs_1.Syntax.Kind.Identifier && fn_caller.operator) {
+            const op = fn_caller.operator.lexem;
+            if (op === "." || op === "->") {
+                is_method = true;
+                method_base_node = fn_caller.selector;
+                method_operator = op;
+            }
+        }
+        const callerAnn = type_resolver_cjs_1.Annotations.get(fn_caller);
+        const mangled1 = callerAnn?._mangledName;
+        const mangled2 = fn_caller?._mangledName;
+        const raw_name = unwrap_cjs_1.UnwrapSyntax.unwrap((is_method ? fn_caller.forward : fn_caller)).raw;
+        const fn_name = mangled1 ?? mangled2 ?? raw_name;
+        // ⚡ 1. Determining the Size of the Returned Value
+        let retSize = 8;
+        if (callerAnn?.resolvedType) {
+            const resolvedType = callerAnn.resolvedType.resolve().type;
+            if (resolvedType instanceof type_checker_cjs_1.TypeSystem.PointerType && resolvedType.points_to.resolve().type instanceof type_checker_cjs_1.TypeSystem.FunctionAnyType) {
+                const fnType = resolvedType.points_to.resolve().type;
+                retSize = this.qual_type_size(fnType.returnType);
+            }
+            else if (resolvedType instanceof type_checker_cjs_1.TypeSystem.FunctionAnyType) {
+                retSize = this.qual_type_size(resolvedType.returnType);
+            }
+        }
+        const isLargeStruct = retSize > 16;
+        const isMediumStruct = retSize > 8 && retSize <= 16;
+        const needsTempSpace = retSize > 8;
+        let buf = Buffer.alloc(0);
+        const allRelocs = [];
+        // ⚡ 2. Allocate space for the response before the call.
+        let retAllocSize = 0;
+        if (needsTempSpace) {
+            retAllocSize = this.align_up(retSize, 16);
+            this.hwm.clearSource();
+            this.hwm.compile('sub', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(retAllocSize)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // Argument Counting
+        const total_args = args.length + (is_method ? 1 : 0) + (isLargeStruct ? 1 : 0);
+        const extra_args = Math.max(0, total_args - sysv_regs.length);
+        const stack_slots = extra_args * 8;
+        const padding = (16 - (stack_slots % 16)) % 16;
+        if (padding > 0) {
+            this.hwm.clearSource();
+            this.hwm.compile('sub', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(padding)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // We evaluate the arguments from right to left.
+        for (let i = args.length - 1; i >= 0; i--) {
+            const argRes = this.compile_expr_to_reg(args[i], 'rax', frame);
+            for (const r of argRes.relocs)
+                allRelocs.push({ ...r, offset: r.offset + buf.length });
+            buf = Buffer.concat([buf, argRes.buffer]);
+            this.hwm.clearSource();
+            this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // this
+        if (is_method && method_base_node) {
+            let thisRes;
+            if (method_operator === ".") {
+                thisRes = this.compile_lvalue_address(method_base_node, 'rax', frame);
+            }
+            else {
+                thisRes = this.compile_expr_to_reg(method_base_node, 'rax', frame);
+            }
+            for (const r of thisRes.relocs)
+                allRelocs.push({ ...r, offset: r.offset + buf.length });
+            buf = Buffer.concat([buf, thisRes.buffer]);
+            this.hwm.clearSource();
+            this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // ⚡ 3. HIDDEN RETURN POINTER: Passing the address of the allocated response buffer!
+        if (isLargeStruct) {
+            // Space was allocated BEFORE the arguments. Calculate the offset to it from the current rsp:
+            const offset = (args.length * 8) + (is_method ? 8 : 0) + padding;
+            this.hwm.clearSource();
+            this.hwm.compile('lea', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rsp', displacement: offset })
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+            this.hwm.clearSource();
+            this.hwm.compile('push', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // Unpacking into SysV registers
+        const regs_to_pop = Math.min(total_args, sysv_regs.length);
+        for (let i = 0; i < regs_to_pop; i++) {
+            this.hwm.clearSource();
+            this.hwm.compile('pop', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(sysv_regs[i])]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // CALL
+        let final_fn_name = fn_name;
+        if (is_method && method_base_node && !mangled1 && !mangled2) {
+            let structName = "$UNKNOWN_STRUCT";
+            const baseAnn = type_resolver_cjs_1.Annotations.get(method_base_node);
+            if (baseAnn?.resolvedType) {
+                let t = baseAnn.resolvedType;
+                if (t.type instanceof type_checker_cjs_1.TypeSystem.PointerType)
+                    t = t.type.points_to;
+                if (t.type instanceof type_checker_cjs_1.TypeSystem.StructType)
+                    structName = t.type.name;
+                else
+                    structName = t.type.name;
+            }
+            final_fn_name = `${structName}__${fn_name}`;
+        }
+        const isExternal = !this.fnMap.has(final_fn_name);
+        if (isExternal) {
+            if (this.targetFormat === header_cjs_1.OutputFormat.KERNEL_OBJECT)
+                this.verify_kmod_symbol(unwrap_cjs_1.UnwrapSyntax.get_start_token(fn_caller), final_fn_name);
+            this.hwc.requireSymbol(final_fn_name);
+        }
+        const callBuf = Buffer.from([0xe8, 0x00, 0x00, 0x00, 0x00]);
+        allRelocs.push({
+            section: '.text',
+            offset: buf.length + 1,
+            type: isExternal ? header_cjs_1.RELOCATION_X86_64_TYPE.R_X86_64_PLT32 : 2,
+            symbolName: final_fn_name,
+            addend: isExternal ? -4 : 0,
+            _deferred: true
+        });
+        buf = Buffer.concat([buf, callBuf]);
+        // 4. Clear the stack of excess arguments.
+        const cleanup_size = padding + stack_slots;
+        if (cleanup_size > 0) {
+            this.hwm.clearSource();
+            this.hwm.compile('add', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(cleanup_size)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // 5. AFTER CALL: If the size is 9–16 bytes, save RAX and RDX to our allocated space.
+        if (isMediumStruct) {
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rsp', displacement: 0 }),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax')
+            ]);
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rsp', displacement: 8 }),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdx')
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // 6. Returning the structure address to RAX
+        if (needsTempSpace) {
+            this.hwm.clearSource();
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp')
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        return { buffer: buf, relocs: allRelocs };
+    }
+    compile_local_statement(stmt, frame, is_main) {
+        if (!stmt)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        switch (stmt.kind) {
+            case expression_cjs_1.Syntax.Kind.Block: {
+                const block = stmt;
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                const breakPatches = [];
+                const continuePatches = [];
+                for (const s of block.statements ?? []) {
+                    const res = this.compile_local_statement(s, frame, is_main);
+                    for (const r of res.relocs)
+                        relocs.push({ ...r, offset: r.offset + buf.length });
+                    // Patch Surfacing
+                    if (res.breakPatches) {
+                        res.breakPatches.forEach(p => breakPatches.push({ offset: p.offset + buf.length, label: p.label }));
+                    }
+                    if (res.continuePatches) {
+                        res.continuePatches.forEach(p => continuePatches.push({ offset: p.offset + buf.length, label: p.label }));
+                    }
+                    buf = Buffer.concat([buf, res.buffer]);
+                }
+                return { buffer: buf, relocs, breakPatches, continuePatches };
+            }
+            case expression_cjs_1.Syntax.Kind.IfStatement: {
+                const ifNode = stmt;
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                const breakPatches = [];
+                const continuePatches = [];
+                const condRes = this.compile_expr_to_reg(ifNode.condition, 'rax', frame);
+                for (const r of condRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, condRes.buffer]);
+                this.hwm.clearSource();
+                this.hwm.compile('cmp', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(0)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                const jeOffsetIndex = buf.length + 2;
+                buf = Buffer.concat([buf, Buffer.from([0x0F, 0x84, 0x00, 0x00, 0x00, 0x00])]);
+                const thenOffset = buf.length;
+                const thenRes = this.compile_local_statement(ifNode.thenBranch, frame, is_main);
+                for (const r of thenRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + thenOffset });
+                if (thenRes.breakPatches)
+                    thenRes.breakPatches.forEach(p => breakPatches.push({ offset: p.offset + thenOffset, label: p.label }));
+                if (thenRes.continuePatches)
+                    thenRes.continuePatches.forEach(p => continuePatches.push({ offset: p.offset + thenOffset, label: p.label }));
+                buf = Buffer.concat([buf, thenRes.buffer]);
+                if (ifNode.elseBranch) {
+                    const jmpOffsetIndex = buf.length + 1;
+                    buf = Buffer.concat([buf, Buffer.from([0xE9, 0x00, 0x00, 0x00, 0x00])]);
+                    buf.writeInt32LE(thenRes.buffer.length + 5, jeOffsetIndex);
+                    const elseOffset = buf.length;
+                    const elseRes = this.compile_local_statement(ifNode.elseBranch, frame, is_main);
+                    for (const r of elseRes.relocs)
+                        relocs.push({ ...r, offset: r.offset + elseOffset });
+                    if (elseRes.breakPatches)
+                        elseRes.breakPatches.forEach(p => breakPatches.push({ offset: p.offset + elseOffset, label: p.label }));
+                    if (elseRes.continuePatches)
+                        elseRes.continuePatches.forEach(p => continuePatches.push({ offset: p.offset + elseOffset, label: p.label }));
+                    buf = Buffer.concat([buf, elseRes.buffer]);
+                    buf.writeInt32LE(elseRes.buffer.length, jmpOffsetIndex);
+                }
+                else {
+                    buf.writeInt32LE(thenRes.buffer.length, jeOffsetIndex);
+                }
+                return { buffer: buf, relocs, breakPatches, continuePatches };
+            }
+            case expression_cjs_1.Syntax.Kind.LabelStatement: {
+                const labelNode = stmt;
+                labelNode.statement._userLabel = labelNode.name.lexem;
+                return this.compile_local_statement(labelNode.statement, frame, is_main);
+            }
+            case expression_cjs_1.Syntax.Kind.WhileStatement: {
+                const whileNode = stmt;
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                const userLabel = whileNode._userLabel;
+                const loopStartIndex = buf.length;
+                const condRes = this.compile_expr_to_reg(whileNode.condition, 'rax', frame);
+                for (const r of condRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + buf.length });
+                buf = Buffer.concat([buf, condRes.buffer]);
+                this.hwm.clearSource();
+                this.hwm.compile('cmp', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(0)
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                const jeOffsetIndex = buf.length + 2;
+                buf = Buffer.concat([buf, Buffer.from([0x0F, 0x84, 0x00, 0x00, 0x00, 0x00])]); // je
+                // BODY
+                const bodyOffset = buf.length;
+                const bodyRes = this.compile_local_statement(whileNode.body, frame, is_main);
+                for (const r of bodyRes.relocs)
+                    relocs.push({ ...r, offset: r.offset + bodyOffset });
+                buf = Buffer.concat([buf, bodyRes.buffer]);
+                const jmpOffsetIndex = buf.length + 1;
+                buf = Buffer.concat([buf, Buffer.from([0xE9, 0x00, 0x00, 0x00, 0x00])]);
+                const loopEndIndex = buf.length;
+                // 1. Patching JE and JMP
+                buf.writeInt32LE(loopEndIndex - (jeOffsetIndex + 4), jeOffsetIndex);
+                buf.writeInt32LE(loopStartIndex - (jmpOffsetIndex + 4), jmpOffsetIndex);
+                // 2. ⚡ Patching the BREAK and CONTINUE statements belonging to this loop.
+                const unhandledBreaks = [];
+                const unhandledContinues = [];
+                if (bodyRes.breakPatches) {
+                    for (const p of bodyRes.breakPatches) {
+                        if (!p.label || p.label === userLabel) {
+                            const patchPos = bodyOffset + p.offset;
+                            buf.writeInt32LE(loopEndIndex - (patchPos + 4), patchPos);
+                        }
+                        else {
+                            unhandledBreaks.push({ offset: bodyOffset + p.offset, label: p.label });
+                        }
+                    }
+                }
+                if (bodyRes.continuePatches) {
+                    for (const p of bodyRes.continuePatches) {
+                        if (!p.label || p.label === userLabel) {
+                            const patchPos = bodyOffset + p.offset;
+                            buf.writeInt32LE(loopStartIndex - (patchPos + 4), patchPos);
+                        }
+                        else {
+                            unhandledContinues.push({ offset: bodyOffset + p.offset, label: p.label });
+                        }
+                    }
+                }
+                return { buffer: buf, relocs, breakPatches: unhandledBreaks, continuePatches: unhandledContinues };
+            }
+            case expression_cjs_1.Syntax.Kind.JumpStatement: {
+                const jumpNode = stmt;
+                const buf = Buffer.from([0xE9, 0x00, 0x00, 0x00, 0x00]); // JMP rel32 (offset = 0)
+                const patch = { offset: 1, label: jumpNode.label?.lexem };
+                if (jumpNode.jumpKind === "break") {
+                    return { buffer: buf, relocs: [], breakPatches: [patch] };
+                }
+                else {
+                    return { buffer: buf, relocs: [], continuePatches: [patch] };
+                }
+            }
+            case expression_cjs_1.Syntax.Kind.ReturnStatement: {
+                const retNode = stmt;
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                if (retNode.expression) {
+                    const ann = type_resolver_cjs_1.Annotations.get(retNode.expression);
+                    const retSize = ann?.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+                    const exprRes = this.compile_expr_to_reg(retNode.expression, 'rax', frame);
+                    for (const r of exprRes.relocs)
+                        relocs.push({ ...r, offset: r.offset + buf.length });
+                    buf = Buffer.concat([buf, exprRes.buffer]);
+                    if (retSize > 16) {
+                        // ⚡ HIDDEN RETURN POINTER: Copying the structure to a hidden address
+                        const hiddenPtrInfo = frame.vars.get("__hidden_ret_ptr");
+                        if (hiddenPtrInfo) {
+                            this.hwm.clearSource();
+                            // Load the destination address from the local variable __hidden_ret_ptr into rdi.
+                            this.hwm.compile('mov', [
+                                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdi'),
+                                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: hiddenPtrInfo.rbp_offset })
+                            ]);
+                            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                            // We perform a `rep movsb` from `rax` to `rdi`.
+                            buf = Buffer.concat([buf, this.emit_memcpy('rdi', 'rax', retSize)]);
+                            // SysV ABI: The function must return the hidden pointer itself in RAX.
+                            this.hwm.clearSource();
+                            this.hwm.compile('mov', [
+                                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rbp', displacement: hiddenPtrInfo.rbp_offset })
+                            ]);
+                            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                        }
+                    }
+                    else if (retSize > 8 && retSize <= 16) {
+                        // ⚡ SysV ABI: Structures ranging from 9 to 16 bytes (e.g., `optional`) are returned in `rax` + `rdx`.
+                        this.hwm.clearSource();
+                        // RAX currently holds an ADDRESS. We need to read the VALUE from it. 
+                        // Read the second half into RDX.
+                        this.hwm.compile('mov', [
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdx'),
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rax', displacement: 8 })
+                        ]);
+                        // Read the first half into RAX (do this last to avoid overwriting the address!)
+                        this.hwm.compile('mov', [
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rax'),
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 8, base: 'rax', displacement: 0 })
+                        ]);
+                        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    }
+                }
+                // Automatic Epilogue
+                const epilogue = Buffer.from([
+                    0x48, 0x89, 0xec, // mov    %rbp,%rsp
+                    0x5d, // pop    %rbp
+                    0xc3 // ret
+                ]);
+                buf = Buffer.concat([buf, epilogue]);
+                return { buffer: buf, relocs };
+            }
+            case expression_cjs_1.Syntax.Kind.InspectStatement: {
+                const insp = stmt;
+                let buf = Buffer.alloc(0);
+                const relocs = [];
+                // 1. We obtain the address of the union (myshape) -> r10.
+                const targetRes = this.compile_lvalue_address(insp.target, 'r10', frame);
+                buf = Buffer.concat([buf, targetRes.buffer]);
+                relocs.push(...targetRes.relocs);
+                // 2. Read the Tag (the first 4 bytes) into %eax.
+                this.hwm.clearSource();
+                this.hwm.compile('mov', [
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('eax'),
+                    main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: 4, base: 'r10', displacement: 0 })
+                ]);
+                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                const caseJumpOffsets = [];
+                for (const c of insp.cases) {
+                    if (c._isDefault) {
+                        // If this is the default pattern `_`, we simply jump into it (there is no condition).
+                        const bodyRes = this.compile_local_statement(c.body, frame, is_main);
+                        for (const r of bodyRes.relocs)
+                            relocs.push({ ...r, offset: r.offset + buf.length });
+                        buf = Buffer.concat([buf, bodyRes.buffer]);
+                        break; // Default is always last.
+                    }
+                    // If it is a specific tag: cmp eax, TAG
+                    this.hwm.clearSource();
+                    this.hwm.compile('cmp', [
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('eax'),
+                        main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(c._variantTag)
+                    ]);
+                    buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    // JNE (Jump to the NEXT case if the tag does not match)
+                    const jneOffsetIndex = buf.length + 2;
+                    const jneBuf = Buffer.from([0x0F, 0x85, 0x00, 0x00, 0x00, 0x00]);
+                    buf = Buffer.concat([buf, jneBuf]);
+                    // INSIDE THE CASE STUDY: EXTRACTING DATA INTO BINDINGS
+                    let currentPayloadOffset = 4;
+                    if (c._bindings) {
+                        for (const bind of c._bindings) {
+                            const localSlot = frame.vars.get(bind.name);
+                            if (localSlot) {
+                                // Read payload from [r10 + currentPayloadOffset] into %rcx
+                                const payloadMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: bind.size, base: 'r10', displacement: currentPayloadOffset });
+                                const rcxSub = this.get_sub_register('rcx', bind.size);
+                                this.hwm.clearSource();
+                                if (bind.size === 1 || bind.size === 2)
+                                    this.hwm.compile('movzx', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx'), payloadMem]);
+                                else
+                                    this.hwm.compile('mov', [main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcxSub), payloadMem]);
+                                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                                // Save %rcx to a local variable (on the stack)
+                                const localMem = main_cjs_1.HardwareMachineFactoryParserOpernadType.parseMem({ size: localSlot.size, base: 'rbp', displacement: localSlot.rbp_offset });
+                                this.hwm.clearSource();
+                                this.hwm.compile('mov', [localMem, main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(rcxSub)]);
+                                buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                            }
+                            currentPayloadOffset += bind.size || 8;
+                        }
+                    }
+                    // Compile the case body itself
+                    const bodyRes = this.compile_local_statement(c.body, frame, is_main);
+                    for (const r of bodyRes.relocs)
+                        relocs.push({ ...r, offset: r.offset + buf.length });
+                    buf = Buffer.concat([buf, bodyRes.buffer]);
+                    // At the end of the case, you need to perform a JMP to the end of the entire inspect block.
+                    const jmpEndOffsetIndex = buf.length + 1;
+                    const jmpBuf = Buffer.from([0xE9, 0x00, 0x00, 0x00, 0x00]);
+                    buf = Buffer.concat([buf, jmpBuf]);
+                    caseJumpOffsets.push(jmpEndOffsetIndex);
+                    // Patch the JNE instruction at the beginning of the case block so that it points HERE (if the tag does not match).
+                    buf.writeInt32LE(buf.length - (jneOffsetIndex + 4), jneOffsetIndex);
+                }
+                // Patch all JMP instructions (exits from successful cases) so that they point to the end.
+                for (const jmpIndex of caseJumpOffsets) {
+                    buf.writeInt32LE(buf.length - (jmpIndex + 4), jmpIndex);
+                }
+                return { buffer: buf, relocs };
+            }
+            case expression_cjs_1.Syntax.Kind.Instruction: {
+                const instr = stmt;
+                const { raw: name } = unwrap_cjs_1.UnwrapSyntax.emit_name(instr);
+                if (name === 'syscall')
+                    return this.compile_syscall_instruction(instr, frame);
+                else if (name === 'call')
+                    return this.compile_call_instruction(instr, frame);
+                else
+                    return this.compile_generic_instruction(instr, frame);
+            }
+            case expression_cjs_1.Syntax.Kind.VariableDeclaration:
+                return this.compile_variable_decl_local(stmt, frame);
+            case expression_cjs_1.Syntax.Kind.Call: {
+                const ann = type_resolver_cjs_1.Annotations.get(stmt);
+                if (ann?._constructorCall?.isUnion) {
+                    // If a union constructor call is used as a standalone expression (which is nonsensical, but syntactically valid),
+                    // we evaluate it (taking side effects into account) and then safely clear the stack to prevent a leak.
+                    const res = this.compile_expr_to_reg(stmt, 'rax', frame);
+                    let buf = res.buffer;
+                    const unionSize = ann.resolvedType ? this.qual_type_size(ann.resolvedType) : 8;
+                    if (unionSize > 8) {
+                        const alloc_size = this.align_up(unionSize, 16);
+                        this.hwm.clearSource();
+                        this.hwm.compile('add', [
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsp'),
+                            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(alloc_size)
+                        ]);
+                        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+                    }
+                    return { buffer: buf, relocs: res.relocs };
+                }
+                return this.compile_hl_call_statement(stmt, frame);
+            }
+            case expression_cjs_1.Syntax.Kind.UnaryExpression:
+                // Обрабатываем i++, ++i, --j и т.д. как standalone-выражения
+                return this.compile_expr_to_reg(stmt, 'rax', frame);
+            case expression_cjs_1.Syntax.Kind.BinaryExpression:
+                return this.compile_assignment_stmt(stmt, frame);
+            default:
+                return { buffer: Buffer.alloc(0), relocs: [] };
+        }
+    }
+    /**
+     * PASS 2 — compile a function body using a pre-built LocalVarFrame.
+     * Handles Instruction, VariableDeclaration, Call (high-level), and
+     * BinaryExpression (assignment) statements.
+     */
+    compile_function_body_with_frame(body, params, frame, is_main = false) {
+        if (!body)
+            return { buffer: Buffer.alloc(0), relocs: [] };
+        const bufs = [];
+        const allRelocs = [];
+        const push_result = (result) => {
+            if (!result || result.buffer.length === 0)
+                return;
+            const base = Buffer.concat(bufs).length;
+            for (const r of result.relocs) {
+                allRelocs.push({ ...r, offset: r.offset + base });
+            }
+            bufs.push(result.buffer);
+        };
+        // Spill incoming parameters to their stack slots.
+        // main (no CRT): reads from the kernel-set initial stack layout.
+        // All other functions: reads from SysV ABI integer registers.
+        if (is_main) {
+            push_result(this.compile_main_entry_param_spills(params, frame));
+        }
+        else {
+            push_result(this.compile_param_spills(params, frame));
+        }
+        for (const stmt of body.statements ?? []) {
+            const res = this.compile_local_statement(stmt, frame, is_main);
+            push_result(res);
+        }
+        return { buffer: Buffer.concat(bufs), relocs: allRelocs };
+    }
+    // =================================================================
     // fn  declaration  (new AST)
     // =================================================================
     compile_function_declaration(node) {
-        const fn_name = unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+        const ann = type_resolver_cjs_1.Annotations.get(node);
+        const fn_name = ann?._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+        // ── GUARD: Skip "raw" templates ─────────────────────────────────
+        // The semantics for a raw template perform an early return within the templateRegistry
+        // and DO NOT visit the body → consequently, there are no annotations on the identifiers inside. 
+        // An instantiated copy always possesses a _mangledName distinct from the raw name.
+        if (node.templateParams && !ann?._mangledName) {
+            return;
+        }
+        // ──────────────────────────────────────────────────────────────────────
         // Collect modifier keywords (static, __init, __exit, __share__, …)
         const modifiers = (node.modifiers ?? []).map((m) => (m.lexem ?? unwrap_cjs_1.UnwrapSyntax.unwrap(m).raw));
         const is_static = modifiers.includes('static');
@@ -523,10 +2737,17 @@ class CompilerDriver {
             this.hwc.requireSymbol(fn_name);
         }
         // Compile the function body.
-        const functionBodyResult = this.compile_function_body_new(node.body);
-        this.fnMap.set(fn_name, {
-            name: fn_name,
+        const params = node.parameters;
+        // PASS 1 — build the local-variable frame (stack layout).
+        const frame = this.pre_scan_local_frame(node.body, params);
+        // PASS 2 — compile the function body using the frame.
+        const functionBodyResult = this.compile_function_body_with_frame(node.body, params, frame, is_main);
+        // const ann = Annotations.get(node as object);
+        const fn_name1 = ann?._mangledName ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node.name).raw;
+        this.fnMap.set(fn_name1, {
+            name: fn_name1,
             bodyResult: functionBodyResult,
+            stackFrameSize: frame.total_stack_size, // consumed by append_all_functions
             isPublic: is_public,
             isMain: is_main,
             isInit: is_init,
@@ -536,7 +2757,17 @@ class CompilerDriver {
             returnTypeOfValue: node.returnType ?? null,
             token: unwrap_cjs_1.UnwrapSyntax.get_start_token(node.name),
         });
-        this.vartable.set(fn_name, { type: 'function', section: '.text' });
+        this.vartable.set(fn_name1, { type: 'function', section: '.text', typeSize: 8 });
+    }
+    // ⚡ Recursive Namespace Traversal
+    compile_namespace_declaration(node) {
+        // A namespace is simply a wrapper around a block of code.
+        if (node.body && node.body.statements) {
+            for (const stmt of node.body.statements) {
+                // Recursively compile functions and variables inside
+                this.compile_statement(stmt);
+            }
+        }
     }
     /**
      * Compiles a function body block (new AST) into a byte buffer + relocations.
@@ -689,9 +2920,16 @@ class CompilerDriver {
             currentExitTextOffset = exitTextSection.data.length;
         }
         const orderedFns = [];
-        this.fnMap.forEach(fn => fn.isMain ? orderedFns.unshift(fn) : orderedFns.push(fn));
+        this.fnMap.forEach(fn => {
+            if (fn.isForwardDeclared)
+                return; // нет тела — пропускаем
+            fn.isMain ? orderedFns.unshift(fn) : orderedFns.push(fn);
+        });
         orderedFns.forEach(fn => {
             const impl_fn = fn.isMain ? new assembly_main_1.impl_assembly_fn_main() : new assembly_main_1.impl_assembly_fn_base();
+            // Restore the pre-scanned frame size so gen_allocate_local_variables()
+            // emits the correct  sub $N, %rsp  in the prologue.
+            impl_fn.fn_locals_size = fn.stackFrameSize ?? 0;
             impl_fn.gen_body(fn.bodyResult.buffer);
             const finalFunctionCode = impl_fn.impl();
             const prologueLength = impl_fn.gen_prologue().length;
@@ -803,9 +3041,12 @@ class CompilerDriver {
     // =================================================================
     // HELPERS
     // =================================================================
-    check_define_var_address_or_value(operand_node, parsed_operand) {
+    check_define_var_address_or_value(operand_node, parsed_operand, frame) {
         if (parsed_operand.type === 'variable_address' || parsed_operand.type === 'variable_value') {
             const symbolName = parsed_operand.type === 'variable_address' ? parsed_operand.address : parsed_operand.value;
+            if (frame && frame.vars.has(symbolName)) {
+                return;
+            }
             if (!this.vartable.has(symbolName) && !this.fnMap.has(symbolName)) {
                 new exceptions.ExpressionException(`Use of undeclared variable or function: '${symbolName}'`, unwrap_cjs_1.UnwrapSyntax.get_start_token(operand_node), this.zcc_compiler_warning);
                 return { buffer: Buffer.alloc(0), relocs: [] };
@@ -823,6 +3064,125 @@ class CompilerDriver {
     }
     __asmx_get_cache_dir() {
         return path_1.default.join(process.cwd(), '.cache', 'asmx');
+    }
+    extract_fn_ptr_name(call_node) {
+        if (call_node?.kind !== expression_cjs_1.Syntax.Kind.Call)
+            return null;
+        const inner = call_node.caller;
+        if (!inner || inner.kind !== expression_cjs_1.Syntax.Kind.Call)
+            return null;
+        const inner_params = inner.parameters ?? [];
+        const name_ue = inner_params[0];
+        if (!name_ue || name_ue.kind !== expression_cjs_1.Syntax.Kind.UnaryExpression)
+            return null;
+        const name_ident = name_ue.operand;
+        if (!name_ident || name_ident.kind !== expression_cjs_1.Syntax.Kind.Identifier)
+            return null;
+        let name = name_ident.selector?.token?.lexem ?? name_ident.token?.lexem;
+        if (!name) {
+            try {
+                name = unwrap_cjs_1.UnwrapSyntax.unwrap(name_ident).raw;
+            }
+            catch {
+                return null;
+            }
+        }
+        return name;
+    }
+    get_sub_register(reg, size) {
+        const mapping = {
+            'rax': ['al', 'ax', 'eax', 'rax'],
+            'rcx': ['cl', 'cx', 'ecx', 'rcx'],
+            'rdx': ['dl', 'dx', 'edx', 'rdx'],
+            'rbx': ['bl', 'bx', 'ebx', 'rbx'],
+            'rsp': ['spl', 'sp', 'esp', 'rsp'],
+            'rbp': ['bpl', 'bp', 'ebp', 'rbp'],
+            'rsi': ['sil', 'si', 'esi', 'rsi'],
+            'rdi': ['dil', 'di', 'edi', 'rdi'],
+            'r8': ['r8b', 'r8w', 'r8d', 'r8'],
+            'r9': ['r9b', 'r9w', 'r9d', 'r9'],
+            'r10': ['r10b', 'r10w', 'r10d', 'r10'],
+            'r11': ['r11b', 'r11w', 'r11d', 'r11'],
+            'r12': ['r12b', 'r12w', 'r12d', 'r12'],
+            'r13': ['r13b', 'r13w', 'r13d', 'r13'],
+            'r14': ['r14b', 'r14w', 'r14d', 'r14'],
+            'r15': ['r15b', 'r15w', 'r15d', 'r15'],
+            // 32-bit aliases
+            'eax': ['al', 'ax', 'eax', 'rax'],
+            'ecx': ['cl', 'cx', 'ecx', 'rcx'],
+            'edx': ['dl', 'dx', 'edx', 'rdx'],
+            'ebx': ['bl', 'bx', 'ebx', 'rbx'],
+            'esp': ['spl', 'sp', 'esp', 'rsp'],
+            'ebp': ['bpl', 'bp', 'ebp', 'rbp'],
+            'esi': ['sil', 'si', 'esi', 'rsi'],
+            'edi': ['dil', 'di', 'edi', 'rdi'],
+            'r8d': ['r8b', 'r8w', 'r8d', 'r8'],
+            'r9d': ['r9b', 'r9w', 'r9d', 'r9'],
+            'r10d': ['r10b', 'r10w', 'r10d', 'r10'],
+            'r11d': ['r11b', 'r11w', 'r11d', 'r11'],
+            'r12d': ['r12b', 'r12w', 'r12d', 'r12'],
+            'r13d': ['r13b', 'r13w', 'r13d', 'r13'],
+            'r14d': ['r14b', 'r14w', 'r14d', 'r14'],
+            'r15d': ['r15b', 'r15w', 'r15d', 'r15']
+        };
+        const key = reg.toLowerCase();
+        const map = mapping[key];
+        if (map) {
+            if (size === 1)
+                return map[0];
+            if (size === 2)
+                return map[1];
+            if (size === 4)
+                return map[2];
+            return map[3];
+        }
+        return key;
+    }
+    is_signed_type(qt) {
+        if (!qt)
+            return false;
+        const resolved = qt.resolve();
+        if (resolved.type instanceof type_checker_cjs_1.TypeSystem.PrimitiveType) {
+            return resolved.type.isSigned;
+        }
+        return false;
+    }
+    /**
+    * Hardware memory copy (equivalent to memcpy)
+    * @param dest_reg Register containing the DESTINATION address (e.g., 'rdi' or 'r10')
+    * @param src_reg Register containing the SOURCE address (e.g., 'rsi' or 'rax')
+    * @param size Number of bytes to copy
+    */
+    emit_memcpy(dest_reg, src_reg, size) {
+        let buf = Buffer.alloc(0);
+        this.hwm.clearSource();
+        // %rdi - destination
+        if (dest_reg !== 'rdi') {
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rdi'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(dest_reg)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // %rsi - Source
+        this.hwm.clearSource();
+        if (src_reg !== 'rsi') {
+            this.hwm.compile('mov', [
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rsi'),
+                main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg(src_reg)
+            ]);
+            buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        }
+        // %rcx — how many bytes to copy
+        this.hwm.clearSource();
+        this.hwm.compile('mov', [
+            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseReg('rcx'),
+            main_cjs_1.HardwareMachineFactoryParserOpernadType.parseImm(size)
+        ]);
+        buf = Buffer.concat([buf, Buffer.from(this.hwm.getSource())]);
+        // REP MOVSB ​​(F3 A4) — copies RCX bytes from [RSI] to [RDI]
+        buf = Buffer.concat([buf, Buffer.from([0xF3, 0xA4])]);
+        return buf;
     }
 }
 module.exports = CompilerDriver;

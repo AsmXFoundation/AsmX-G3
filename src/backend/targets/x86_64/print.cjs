@@ -143,19 +143,6 @@ _a = PrintTree, _PrintTree_print_tree = function _PrintTree_print_tree(node, pre
             }
             break;
         }
-        case expression_cjs_1.Syntax.Kind.Application: {
-            const appNode = node;
-            if (appNode.name && this.isNode(appNode.name)) {
-                desc += ` ${__classPrivateFieldGet(this, _a, "m", _PrintTree_getNodeBrief).call(this, appNode.name)}`;
-            }
-            if (appNode.generics)
-                desc += ` ${this.C.dim}<...>${this.C.reset}`;
-            if (appNode.parameters)
-                desc += ` ${this.C.dim}(...)${this.C.reset}`;
-            if (appNode.returnType)
-                desc += ` ${this.C.dim}-> ...${this.C.reset}`;
-            break;
-        }
         case expression_cjs_1.Syntax.Kind.Closure: {
             const closureNode = node;
             if (closureNode.capture)
@@ -284,6 +271,12 @@ _a = PrintTree, _PrintTree_print_tree = function _PrintTree_print_tree(node, pre
             }
         }
     }
+    else if (value instanceof token_cjs_1.StructToken && value.type == token_cjs_1.Token.IDENTIFIER) {
+        const releaseToken = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Identifier]({
+            selector: new expression_cjs_1.Syntax.NodeShape({ kind: expression_cjs_1.Syntax.Kind.Identifier, token: value })
+        });
+        children.push({ node: releaseToken, role });
+    }
 }, _PrintTree_collectChildren = function _PrintTree_collectChildren(node) {
     const children = [];
     switch (node.kind) {
@@ -322,17 +315,9 @@ _a = PrintTree, _PrintTree_print_tree = function _PrintTree_print_tree(node, pre
             }
             break;
         case expression_cjs_1.Syntax.Kind.Identifier:
+            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "template", node.generics);
             break;
         case expression_cjs_1.Syntax.Kind.Literal:
-            break;
-        case expression_cjs_1.Syntax.Kind.Application:
-            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "name", node.name);
-            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "generics", node.generics);
-            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "parameters", node.parameters);
-            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "returnType", node.returnType);
-            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "body", node.body);
-            if (node.attributes)
-                __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "attributes", node.attributes);
             break;
         case expression_cjs_1.Syntax.Kind.Closure:
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "capture", node.capture);
@@ -377,6 +362,7 @@ _a = PrintTree, _PrintTree_print_tree = function _PrintTree_print_tree(node, pre
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "type", varNode.typeNode);
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "name", varNode.name);
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "initializer", varNode.initializer);
+            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "arrayDimensions", varNode.arrayDimensions);
             break;
         }
         case expression_cjs_1.Syntax.Kind.FunctionDeclaration: {
@@ -399,6 +385,7 @@ _a = PrintTree, _PrintTree_print_tree = function _PrintTree_print_tree(node, pre
             }
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "returnType", funcNode.returnType);
             __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "body", funcNode.body);
+            __classPrivateFieldGet(this, _a, "m", _PrintTree_addChild).call(this, children, "templateParams", funcNode.templateParams);
             break;
         }
         case expression_cjs_1.Syntax.Kind.ParameterDeclaration: {

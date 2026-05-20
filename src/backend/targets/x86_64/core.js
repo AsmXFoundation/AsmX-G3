@@ -10,6 +10,7 @@ const Router = require('../../../execution/router.js');
 const CompilerDriver = require('./driver.js');
 const { PrintTree } = require('./print.cjs');
 const { MangleService } = require('../../../parsing/mangle.cjs');
+const { HardwareMachineFactoryExceptionJournal } = require('./hwm/main.cjs');
 
 function fs_check_available_file_output_extension(_fd) {
   l$0: if (_fd) {
@@ -48,9 +49,10 @@ class Core {
 
     if (fs.existsSync(src)) {
       Server.journal.process(`Building llvm.js ...`, 'zgen');
-      llvm.Config.setCommentLine(';;');
+      llvm.Config.setCommentLine('//');
       llvm.Config.setCommentBlock('/*');
       llvm.Keywords.put('extends', 'as');
+      llvm.Tokens.put({ name: 'PATTERN_CASE', lexem: '=>' });
       llvm.Tokens.put({ name: 'ARROW', lexem: '->' });
       llvm.Tokens.put({ name: 'SCOPE', lexem: '::' });
       llvm.Tokens.put({ name: 'OPTIONAL_CHAIN', lexem: '?.' });
@@ -127,11 +129,16 @@ class Core {
 
         const module = require('../../../parsing/parser.cjs');
         const parser = new module.RecursiveDescentParser(tokens);
-        const tree = parser.parse_translation_unit();
+        let tree = parser.parse_translation_unit();
 
         if (parameters?.ast_dump) {
           PrintTree.print_node(tree);
         }
+
+        const module_expander = require("../../../parsing/module_expander.cjs");
+        const expander = new module_expander.ModuleExpander();
+        let mainFilePath = src;
+        tree = expander.expand(tree, mainFilePath);
 
         const semantic = require('../../../parsing/semantic_analyzer.cjs');
         const sm = new semantic.SemanticAnalyzer.SemanticAnalyzer();
@@ -152,6 +159,8 @@ class Core {
         fs_check_available_file_output_extension(parameters?.objname);
         new CompilerDriver(ast, parameters.objname, parameters);
       }
+
+      HardwareMachineFactoryExceptionJournal.throw_stacktrace();
 
       // tokens = Transformer.transform(tokens);
       // const ast = new RecursiveDescentParser(parameters?.compilation_mode).parser(tokens);

@@ -26,14 +26,14 @@ const ConstRegisterFile: CommonRegisterInterface = {
   'rbp': { code: 5, size: OperandSize.Qword },
   'rsi': { code: 6, size: OperandSize.Qword },
   'rdi': { code: 7, size: OperandSize.Qword },
-  'r8': { code: 0, size: OperandSize.Qword, requiresRex: true },
-  'r9': { code: 1, size: OperandSize.Qword, requiresRex: true },
-  'r10': { code: 2, size: OperandSize.Qword, requiresRex: true },
-  'r11': { code: 3, size: OperandSize.Qword, requiresRex: true },
-  'r12': { code: 4, size: OperandSize.Qword, requiresRex: true },
-  'r13': { code: 5, size: OperandSize.Qword, requiresRex: true },
-  'r14': { code: 6, size: OperandSize.Qword, requiresRex: true },
-  'r15': { code: 7, size: OperandSize.Qword, requiresRex: true },
+  'r8': { code: 0, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r9': { code: 1, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r10': { code: 2, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r11': { code: 3, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r12': { code: 4, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r13': { code: 5, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r14': { code: 6, size: OperandSize.Qword, requiresRex: true, isExtended: true },
+  'r15': { code: 7, size: OperandSize.Qword, requiresRex: true, isExtended: true },
   // 32-bit
   'eax': { code: 0, size: OperandSize.Dword },
   'ecx': { code: 1, size: OperandSize.Dword },
@@ -153,6 +153,28 @@ class HardwareMachineFactoryExceptionJournal extends HardwareMachineFactoryBase 
 
   public static throw(message: string): void {
     this.journal.push(`\x1b[41m🐞\x1b[0m ${message}\x1b[0m`);
+  }
+
+  public static throw_runtime(message: string): void {
+    console.log(`\x1b[41m🐞\x1b[0m ${message}\x1b[0m`);
+  }
+
+  public static throw_stacktrace(): void {
+    const journal_formed = [];
+
+    for (let index = 0; index < this.journal.length; index++) {
+      const message = this.journal[index];
+      const count = this.journal.filter(m => m == message).length;
+      if (count > 0) {
+        this.journal = this.journal.filter(m => m != message);
+        journal_formed.push(message + `(x${count})`);
+      } else
+        journal_formed.push(message);
+    }
+
+    for (const message of journal_formed) {
+      console.log(message);
+    }
   }
 }
 
@@ -594,6 +616,10 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
     this.instructionSet = set;
   }
 
+  public hasInstruction(instruction: string): boolean {
+    return this.instructionSet.has(instruction);
+  }
+
   public getSource(): Buffer {
     return this.source;
   }
@@ -885,18 +911,21 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
     return candidates[0];
   }
 
-  public compile(mnemonic: string, operands: Operand[]) {
+  public compile(mnemonic: string, operands: Operand[]): { ok: boolean, error: string } {
     const definition = this.instructionSet.get(mnemonic.toLowerCase());
     if (!definition) {
       HardwareMachineFactoryExceptionJournal.throw(`Unknown instruction mnemonic: ${mnemonic}`);
       // console.log(`Unknown instruction mnemonic: ${mnemonic}`);
+      return;
     }
 
     // Find the matching variant based on operands
     const variant = this.findMatchingVariant(definition as InstructionDefinition, operands);
     if (!variant) {
-      HardwareMachineFactoryExceptionJournal.throw(`No matching instruction variant found for mnemonic: ${mnemonic}`);
+      const error = `No matching instruction variant found for mnemonic: ${mnemonic}`;
+      HardwareMachineFactoryExceptionJournal.throw(error);
       // throw new Error(`No matching variant for ${mnemonic} with operands: ${JSON.stringify(operands)}`);
+      return {ok: false, error};
     }
 
     const buffers: Buffer[] = [];
@@ -1081,6 +1110,8 @@ class HardwareMachineFactory extends HardwareMachineFactoryBase {
     const finalBuffer = Buffer.concat(buffers);
     this.source = Buffer.concat([this.source, finalBuffer]);
     // console.log(`Compiled ${mnemonic}: ${finalBuffer.toString('hex')}`);
+
+    return {ok: true, error: ""};
   }
 }
 

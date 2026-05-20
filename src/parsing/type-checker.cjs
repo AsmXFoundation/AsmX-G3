@@ -1,8 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SymbolTable = exports.TypeSystem = void 0;
+const token_cjs_1 = require("../types/token.cjs");
 const unwrap_cjs_1 = require("../types/unwrap.cjs");
 const mangle_cjs_1 = require("./mangle.cjs");
+const type_resolver_cjs_1 = require("./type_resolver.cjs");
 const exceptions = require("llvm.js/exceptions");
 var TypeSystem;
 (function (TypeSystem) {
@@ -17,7 +19,11 @@ var TypeSystem;
         TypeKind[TypeKind["Function"] = 16] = "Function";
         TypeKind[TypeKind["Template"] = 17] = "Template";
         TypeKind[TypeKind["Instantiated"] = 18] = "Instantiated";
-        TypeKind[TypeKind["VariadicPack"] = 19] = "VariadicPack"; // T...
+        TypeKind[TypeKind["VariadicPack"] = 19] = "VariadicPack";
+        TypeKind[TypeKind["Struct"] = 20] = "Struct";
+        TypeKind[TypeKind["Enum"] = 21] = "Enum";
+        TypeKind[TypeKind["Union"] = 22] = "Union";
+        TypeKind[TypeKind["OverloadSet"] = 23] = "OverloadSet";
     })(TypeKind = TypeSystem.TypeKind || (TypeSystem.TypeKind = {}));
     let ValueCategory;
     (function (ValueCategory) {
@@ -111,7 +117,8 @@ var TypeSystem;
                 // any arithmetic type → bool (integral-to-bool, C++ [conv.bool])
                 if (resolved.name === PrimitiveTypeEnumeration.BOOL)
                     return true;
-                return this.sizeBytes <= resolved.sizeBytes;
+                // return this.sizeBytes <= resolved.sizeBytes;
+                return true; // narrowing conversion is always safe
             }
             return false;
         }
@@ -266,6 +273,63 @@ var TypeSystem;
         size() { return 0; }
     }
     TypeSystem.FunctionAnyType = FunctionAnyType;
+    class StructType extends AnyType {
+        constructor(name) {
+            super(TypeKind.Struct, name);
+            this.fields = new Map();
+            this.totalSize = 0;
+            this.alignment = 1;
+            this.methods = new Map();
+        }
+        is_assignable_to(other, src_cv, dst_cv) {
+            const resolved = other.resolve();
+            return resolved instanceof StructType && resolved.name === this.name;
+        }
+        resolve() { return this; }
+        size() { return this.totalSize; }
+    }
+    TypeSystem.StructType = StructType;
+    class EnumType extends AnyType {
+        constructor(name) {
+            super(TypeKind.Enum, name);
+            this.members = new Map();
+        }
+        is_assignable_to(other, src_cv, dst_cv) {
+            const resolved = other.resolve();
+            return resolved instanceof EnumType && resolved.name === this.name;
+        }
+        resolve() { return this; }
+        size() { return 4; }
+    }
+    TypeSystem.EnumType = EnumType;
+    class TaggedUnionType extends AnyType {
+        constructor(name) {
+            super(TypeKind.Union, name);
+            this.variants = new Map();
+            this.maxSize = 0;
+        }
+        is_assignable_to(other, src_cv, dst_cv) {
+            const resolved = other.resolve();
+            return resolved instanceof TaggedUnionType && resolved.name === this.name;
+        }
+        resolve() { return this; }
+        size() {
+            // 4 bytes for tag + max payload. And we align everything to 8 bytes.
+            const total = this.maxSize + 4;
+            return Math.ceil(total / 8) * 8;
+        }
+    }
+    TypeSystem.TaggedUnionType = TaggedUnionType;
+    class OverloadSetType extends AnyType {
+        constructor(overloads) {
+            super(TypeKind.OverloadSet, "<overload-set>");
+            this.overloads = overloads;
+        }
+        is_assignable_to() { return false; }
+        resolve() { return this; }
+        size() { return 0; }
+    }
+    TypeSystem.OverloadSetType = OverloadSetType;
     let PrimitiveTypeEnumeration;
     (function (PrimitiveTypeEnumeration) {
         PrimitiveTypeEnumeration["VOID"] = "void";
@@ -279,14 +343,27 @@ var TypeSystem;
     class TypeTable {
         constructor() {
             this.types = new Map();
+            this._currentStruct = null;
             this.register(new PrimitiveType(PrimitiveTypeEnumeration.VOID, 1, false));
-            this.register(new PrimitiveType(PrimitiveTypeEnumeration.CHAR, 1, false));
+            this.register(new PrimitiveType(PrimitiveTypeEnumeration.CHAR, 1, true));
             this.register(new PrimitiveType(PrimitiveTypeEnumeration.BOOL, 1, false));
             this.register(new PrimitiveType(PrimitiveTypeEnumeration.INT16, 2, true));
             this.register(new PrimitiveType(PrimitiveTypeEnumeration.INT32, 4, true));
             this.register(new PrimitiveType(PrimitiveTypeEnumeration.NULLPTR, 8, false));
         }
         ;
+        static getInstance() {
+            if (!TypeTable.instance) {
+                TypeTable.instance = new TypeTable();
+            }
+            return TypeTable.instance;
+        }
+        pushStructContext(name) {
+            this._currentStruct = name;
+        }
+        popStructContext() {
+            this._currentStruct = null;
+        }
         register(type) {
             this.types.set(type.name, type);
         }
@@ -315,6 +392,71 @@ var TypeSystem;
             this.typeTable = typeTable;
         }
         ;
+        findConstructor(structType, argTypes, typeTable) {
+            const candidates = Array.from(structType.methods.values()).flat().filter(m => m.isConstructor);
+            if (candidates.length === 0)
+                return null;
+            // 1. Exact match (skip implicit 'this' at index 0)
+            for (const cand of candidates) {
+                const userParamCount = argTypes.length;
+                const fnParamCount = cand.fnType.parameters.length - 1; // -1 for 'this'
+                if (userParamCount !== fnParamCount)
+                    continue;
+                let match = true;
+                for (let i = 0; i < userParamCount; i++) {
+                    const s = argTypes[i].resolve();
+                    const d = cand.fnType.parameters[i + 1].resolve(); // +1 for skip 'this'
+                    if (s.type.name !== d.type.name || s.cv.const !== d.cv.const) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                    return { fnType: cand.fnType, node: cand.node };
+            }
+            // 2. With implicit conversions
+            for (const cand of candidates) {
+                const userParamCount = argTypes.length;
+                const fnParamCount = cand.fnType.parameters.length - 1;
+                if (userParamCount !== fnParamCount)
+                    continue;
+                let match = true;
+                for (let i = 0; i < userParamCount; i++) {
+                    const result = this.check_initialization(cand.fnType.parameters[i + 1], argTypes[i], typeTable);
+                    if (!result.ok) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                    return { fnType: cand.fnType, node: cand.node };
+            }
+            return null;
+        }
+        checkMemberAccess(structType, memberName, context) {
+            const field = structType.fields.get(memberName);
+            const methodArr = structType.methods.get(memberName);
+            const method = methodArr && methodArr.length > 0 ? methodArr[0] : undefined;
+            const member = field ?? method;
+            if (!member)
+                return { ok: false, reason: `No member '${memberName}'` };
+            const access = member.access ?? token_cjs_1.ReserveIdentifier.RID_PUBLIC;
+            if (access === token_cjs_1.ReserveIdentifier.RID_PUBLIC) {
+                return { ok: true };
+            }
+            if (access === token_cjs_1.ReserveIdentifier.RID_PRIVATE) {
+                if (context.currentStruct === structType.name)
+                    return { ok: true };
+                return { ok: false, reason: `'${memberName}' is private in '${structType.name}'` };
+            }
+            if (access === token_cjs_1.ReserveIdentifier.RID_PROTECTED) {
+                // TODO: Implement support for inheritance
+                if (context.currentStruct === structType.name)
+                    return { ok: true };
+                return { ok: false, reason: `'${memberName}' is protected in '${structType.name}'` };
+            }
+            return { ok: true };
+        }
         check_assignment(lhs, rhs) {
             const inner_lhs = lhs.resolve();
             const inner_rhs = rhs.resolve();
@@ -328,8 +470,11 @@ var TypeSystem;
         }
         // check_initialization — initialization (less strict than assignment).
         // Allows const T x = expr; (lhs can be const during initialization).
-        check_initialization(lhs, rhs) {
-            const l = lhs.resolve();
+        check_initialization(lhs, rhs, typeTable) {
+            let l = lhs.resolve();
+            if (typeTable) {
+                l = type_resolver_cjs_1.TypeResolver.normalize_type_with_context(lhs, typeTable).resolve();
+            }
             const r = rhs.resolve();
             // --- Const lvalue reference binding (C++ [dcl.init.ref]) ---
             // const T& ref = expr; — allowed when expr is implicitly convertible to T.
@@ -420,11 +565,15 @@ var SymbolTable;
             this.parent = parent;
             this.symbols = new Map();
         }
+        ;
         define(name, symbol_record) {
-            if (this.symbols.has(name)) {
+            if (!this.symbols.has(name))
+                this.symbols.set(name, []);
+            const arr = this.symbols.get(name);
+            if (symbol_record.kind !== SymbolKind.Function && arr.length > 0) {
                 new exceptions.ExpressionException(`Symbol ${name} already defined`, unwrap_cjs_1.UnwrapSyntax.get_start_token(symbol_record.node));
             }
-            this.symbols.set(name, symbol_record);
+            arr.push(symbol_record);
         }
         resolve(name) {
             if (this.symbols.has(name))

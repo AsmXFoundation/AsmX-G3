@@ -1,6 +1,6 @@
 import { PrintTree } from "../backend/targets/x86_64/print.cjs";
 import { Syntax } from "../types/expression.cjs";
-import { ReserveIdentifier, ReserveIdentifierCoder, StructToken, Token, TokenStream } from "../types/token.cjs";
+import { ReserveIdentifier, ReserveIdentifierCoder, StructToken, Token, TokenOf, TokenStream } from "../types/token.cjs";
 
 const exceptions = require('llvm.js/exceptions');
 
@@ -36,7 +36,7 @@ class RecursiveDescentParser {
   // =================================================================
   // ENTRY POINT
   // =================================================================
-  
+
   public parse_translation_unit(): Syntax.Program {
     const nodes: Syntax.Program = [];
     PrintTree.verbose = true;
@@ -55,6 +55,34 @@ class RecursiveDescentParser {
 
     if (token.type == Token.DOGE) {
       return this.parse_instruction();
+    }
+
+    // if (token.type === Token.OPEN_CURLY_BRACKET) {
+    //   return this.parse_block();
+    // }
+
+    if (token.type === Token.IDENTIFIER) {
+      if (token.lexem === "if") return this.parse_if_statement();
+      if (token.lexem === "while") return this.parse_while_statement();
+      if (token.lexem === "return") return this.parse_return_statement();
+
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_BREAK)) return this.parse_jump_statement();
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_CONTINUE)) return this.parse_jump_statement();
+
+      if (this.stream.peek(1).type == Token.COLON && this.is_access_modifier_label(token) == false) {
+        const afterColon = this.stream.peek(2);
+        if (afterColon && (ReserveIdentifierCoder.is(afterColon, ReserveIdentifier.RID_WHILE))) {
+          return this.parse_label_statement();
+        }
+      }
+
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_TEMPLATE)) return this.parse_template_declaration();
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_INSPECT)) return this.parse_inspect_statement();
+
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_STRUCT)) return this.parse_struct_declaration();
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_NAMESPACE)) return this.parse_namespace_declaration();
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_ENUM)) return this.parse_enumeration_declaration();
+      if (ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_UNION)) return this.parse_union_declaration();
     }
 
     {
@@ -87,12 +115,14 @@ class RecursiveDescentParser {
       // otherwise (Expression Statement)
       // just simple expression aka "mystruct.release = 3"
       let expr_node = base_expr;
-      if ( next_token && (this.is_direct_assignment_operator(next_token.type) ||
-                          this.is_compound_assignment_operator(next_token.type) ||
-                          next_token.type == Token.COLON)) {
+      if (
+        next_token && (this.is_direct_assignment_operator(next_token.type) ||
+        this.is_compound_assignment_operator(next_token.type) ||
+        next_token.type == Token.COLON)
+      ) {
         const operator = this.stream.next()!;
         // const right = this.parse_expression(Precedence.LOWEST);
-        
+
         if (operator.type == Token.COLON) {
           const right = this.parse_type_constructor();
 
@@ -140,7 +170,7 @@ class RecursiveDescentParser {
       if (name_token.lexem != "section") break garbage;
       if (this.stream.is(Token.IDENTIFIER) && this.stream.is(Token.OPEN_CURLY_BRACKET, 1)) {
         const extra_name = this.stream.expect(Token.IDENTIFIER);
-  
+
         nodeShape.operands.push(new Syntax.NodeShape<Syntax.Kind.Identifier>({
           kind: Syntax.Kind.Identifier,
           token: extra_name
@@ -178,10 +208,24 @@ class RecursiveDescentParser {
   parse_variable_declaration(modifiers, typeNode) {
     const nameNode = this.parse_expression(Precedence.POSTFIX);
 
+    // Array dimensions: char buffer[32]  /  int arr[N][M]
+    let arrayDimensions = [];
+    // check array dimensions
+    while (this.stream.is(Token.OPEN_SQUARE_BRACKET)) {
+      if (!arrayDimensions) arrayDimensions = [];
+      this.stream.next(); // consume [
+      if (!this.stream.is(Token.CLOSE_SQUARE_BRACKET)) {
+        arrayDimensions.push(this.parse_expression(Precedence.LOWEST));
+      } else {
+        arrayDimensions.push(null); // unsized: char buf[]
+      }
+      this.stream.expect(Token.CLOSE_SQUARE_BRACKET);
+    }
+
     let initializer = null;
     // check initializer ( = expr) or (= { })
     const peek = this.stream.peek();
-    if(peek && this.is_direct_assignment_operator(peek.type)) {
+    if (peek && this.is_direct_assignment_operator(peek.type)) {
       this.stream.next();
       initializer = this.parse_expression(Precedence.LOWEST);
     }
@@ -198,7 +242,8 @@ class RecursiveDescentParser {
       modifiers,
       typeNode,
       name: nameNode as InstanceType<typeof Syntax.Registry[Syntax.Kind.Identifier]>,
-      initializer
+      initializer,
+      arrayDimensions: arrayDimensions ?? undefined
     });
 
     return node;
@@ -307,7 +352,7 @@ class RecursiveDescentParser {
   // =================================================================
 
   // Here we resolve context (register vs imm vs memory, etc)
-  parse_instruction_operand(){
+  parse_instruction_operand() {
     const token = this.stream.peek();
 
     if (token?.type == undefined)
@@ -362,12 +407,65 @@ class RecursiveDescentParser {
   ): InstanceType<typeof Syntax.Registry[Syntax.Kind]> {
     let left = this.parse_prefix(isTypeContext);
 
-    while(minPrecedence < this.get_next_precedence(stopAtBrace, isTypeContext)) {
+    while (minPrecedence < this.get_next_precedence(stopAtBrace, isTypeContext)) {
       const token = this.stream.peek();
       if (!token) break;
 
+      if (token.type === Token.LESS) {
+        if (left.kind === Syntax.Kind.Identifier && this.lookahead_is_generic()) {
+          const snapshot = this.stream.snapshot();
+          let isGeneric = false;
+          let genericsNode = null;
+
+          try {
+            genericsNode = this.withAngleBrackets(() => {
+              this.stream.next(); // consume '<'
+              const elements = [];
+
+              if (!this.stream.is(Token.GREATER)) {
+                do {
+                  elements.push(this.parse_expression(Precedence.ASSIGNMENT, false, true));
+                } while (this.stream.consume_if(Token.COMMA));
+              }
+
+              // Silent check: DO NOT call `expect_greater()` immediately,
+              // to avoid logging errors during speculative parsing.
+              if (!this.stream.is(Token.GREATER) &&
+                  !this.stream.is(Token.RIGHT_SHIFT) &&
+                  !this.stream.is(Token.GREATER_EQUAL)) {
+                throw new Error("speculative_not_generic");
+              }
+
+              this.expect_greater();
+              return new Syntax.RegistryMap[Syntax.Kind.Generics]({ elements });
+            });
+            isGeneric = true;
+          } catch (error: any) {
+            if (isTypeContext && error?.message !== "speculative_not_generic") {
+              throw error;
+            }
+            this.stream.restore(snapshot);
+            isGeneric = false;
+          }
+
+          if (isGeneric) {
+            left = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
+              kind: Syntax.Kind.Identifier,
+              selector: left,
+              generics: genericsNode
+            });
+            continue;
+          }
+        }
+      }
+
       if (this.stream.is(Token.OPEN_PAREN)) {
         left = this.parse_function_call(left);
+        continue;
+      }
+
+      if (token.type === Token.OPEN_SQUARE_BRACKET) {
+        left = this.parse_subscript_expression(left);
         continue;
       }
 
@@ -379,7 +477,8 @@ class RecursiveDescentParser {
           kind: Syntax.Kind.Identifier,
           operator,
           selector: left,
-          forward: right
+          forward: right,
+          _isThisAccess: left.kind == Syntax.Kind.ThisLiteral
         });
         continue;
       }
@@ -409,13 +508,13 @@ class RecursiveDescentParser {
       if (this.is_binary_operator(token.type)) {
         const operator = this.stream.next()!;
 
-        const nextPrecedence = this.is_right_associative(operator.type) 
-            ? this.get_precedence(operator.type) 
-            : this.get_precedence(operator.type) + 1;
+        const nextPrecedence = this.is_right_associative(operator.type)
+          ? this.get_precedence(operator.type)
+          : this.get_precedence(operator.type) + 1;
 
         const right = this.parse_expression(nextPrecedence, stopAtBrace, isTypeContext);
 
-        left = new Syntax.RegistryMap[Syntax.Kind.BinaryExpression]({left, operator, right});
+        left = new Syntax.RegistryMap[Syntax.Kind.BinaryExpression]({ left, operator, right });
         continue;
       }
 
@@ -477,7 +576,7 @@ class RecursiveDescentParser {
     }
 
     const close = this.stream.expect(Token.CLOSE_CURLY_BRACKET);
-    return new Syntax.RegistryMap[Syntax.Kind.Block]({open, close, statements});
+    return new Syntax.RegistryMap[Syntax.Kind.Block]({ open, close, statements });
   }
 
   private parse_prefix(isTypeContext: boolean = false): InstanceType<typeof Syntax.RegistryMap[Syntax.Kind]> {
@@ -593,6 +692,13 @@ class RecursiveDescentParser {
     return node;
   }
 
+  parse_subscript_expression(left: Syntax.Node<any>) {
+    const bracketToken = this.stream.expect(Token.OPEN_SQUARE_BRACKET);
+    const index = this.parse_expression(Precedence.LOWEST);
+    this.stream.expect(Token.CLOSE_SQUARE_BRACKET);
+    return new Syntax.RegistryMap[Syntax.Kind.SubscriptExpression]({ base: left, index, bracketToken });
+  }
+
   parse_primary(): InstanceType<typeof Syntax.RegistryMap[Syntax.Kind]> {
     const token = this.stream.peek();
 
@@ -617,8 +723,8 @@ class RecursiveDescentParser {
     }
 
     const castexpr = this.parse_cast_expression();
-      if (castexpr)
-        return castexpr;
+    if (castexpr)
+      return castexpr;
 
     if (token.type == Token.IDENTIFIER) {
       const idToken = this.stream.next()!;
@@ -638,13 +744,9 @@ class RecursiveDescentParser {
         });
       }
 
-      // if (ReserveIdentifierCoder.is(idToken, ReserveIdentifier.RID_NULL)) {
-      //   return new Syntax.RegistryMap[Syntax.Kind.Literal]({
-      //     kind: Syntax.Kind.Literal,
-      //     type: Syntax.Type.NullLiteral,
-      //     value: token
-      //   });
-      // }
+      if (ReserveIdentifierCoder.is(idToken, ReserveIdentifier.RID_THIS)) {
+        return new Syntax.RegistryMap[Syntax.Kind.ThisLiteral]({ token });
+      }
 
       const idNode = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
         selector: new Syntax.NodeShape<Syntax.Kind.Identifier>({
@@ -662,7 +764,7 @@ class RecursiveDescentParser {
 
   parse_function_call(calleeNode) {
     this.stream.expect(Token.OPEN_PAREN);
-    let args= this.parse_sequence(Token.CLOSE_PAREN);
+    let args = this.parse_sequence(Token.CLOSE_PAREN);
 
     let node = new Syntax.RegistryMap[Syntax.Kind.Call]({
       kind: Syntax.Kind.Call,
@@ -685,6 +787,370 @@ class RecursiveDescentParser {
 
     this.stream.expect(close);
     return seq;
+  }
+
+  // =================================================================
+  // CONTROL FLOW
+  // =================================================================
+
+  private parse_block_or_statement() {
+    if (this.stream.is(Token.OPEN_CURLY_BRACKET)) {
+      return this.parse_block();
+    }
+    return this.parse_statement();
+  }
+
+  private parse_if_statement() {
+    this.stream.next(); // consume 'if'
+    this.stream.expect(Token.OPEN_PAREN);
+    const condition = this.parse_expression(Precedence.LOWEST);
+    this.stream.expect(Token.CLOSE_PAREN);
+
+    const thenBranch = this.parse_block_or_statement();
+    let elseBranch = null;
+
+    const next = this.stream.peek();
+    if (next && next.type === Token.IDENTIFIER && next.lexem === "else") {
+      this.stream.next(); // consume 'else'
+      elseBranch = this.parse_block_or_statement();
+    }
+
+    return new Syntax.RegistryMap[Syntax.Kind.IfStatement]({
+      kind: Syntax.Kind.IfStatement,
+      condition,
+      thenBranch,
+      elseBranch
+    });
+  }
+
+  private parse_while_statement() {
+    this.stream.next(); // consume 'while'
+    this.stream.expect(Token.OPEN_PAREN);
+    const condition = this.parse_expression(Precedence.LOWEST);
+    this.stream.expect(Token.CLOSE_PAREN);
+
+    const body = this.parse_block_or_statement();
+
+    return new Syntax.RegistryMap[Syntax.Kind.WhileStatement]({
+      kind: Syntax.Kind.WhileStatement,
+      condition,
+      body
+    });
+  }
+
+  private parse_jump_statement(): Syntax.Node<Syntax.Kind.JumpStatement> {
+    const jumpTypeToken = this.stream.next()!;
+    let label: StructToken | undefined = undefined;
+
+    if (this.stream.peek()?.type === Token.IDENTIFIER) {
+      label = this.stream.next()!;
+    }
+
+    this.stream.expect(Token.SEMICOLON);
+
+    return new Syntax.RegistryMap[Syntax.Kind.JumpStatement]({
+      kind: Syntax.Kind.JumpStatement,
+      jumpKind: jumpTypeToken.lexem as "break" | "continue",
+      label
+    });
+  }
+
+  private parse_label_statement(): Syntax.Node<Syntax.Kind.LabelStatement> {
+    const nameToken = this.stream.next()!;
+    this.stream.expect(Token.COLON);
+
+    const statement = this.parse_statement();
+
+    return new Syntax.RegistryMap[Syntax.Kind.LabelStatement]({
+      kind: Syntax.Kind.LabelStatement,
+      name: nameToken,
+      statement
+    });
+  }
+
+  private parse_return_statement() {
+    this.stream.next(); // consume 'return'
+    let expression = null;
+
+    if (!this.stream.is(Token.SEMICOLON)) {
+      expression = this.parse_expression(Precedence.LOWEST);
+    }
+    this.stream.expect(Token.SEMICOLON);
+
+    return new Syntax.RegistryMap[Syntax.Kind.ReturnStatement]({
+      kind: Syntax.Kind.ReturnStatement,
+      expression
+    });
+  }
+
+  parse_struct_declaration(): Syntax.Node<Syntax.Kind.StructDeclaration> {
+    this.stream.next(); // consume 'struct' keyword
+    const nameToken = this.stream.expect(Token.IDENTIFIER);
+    const nameNode = new Syntax.NodeShape<Syntax.Kind.Identifier>({ kind: Syntax.Kind.Identifier, token: nameToken });
+
+    this.stream.expect(Token.OPEN_CURLY_BRACKET);
+    const fields: any[] = [];
+
+    let currentAccess: string = ReserveIdentifier.RID_PUBLIC;
+
+    while (!this.stream.is(Token.CLOSE_CURLY_BRACKET) && !this.stream.is(Token.EOF)) {
+      if (this.is_access_modifier_label(this.stream.peek())) {
+        const spec = this.stream.next();
+        this.stream.expect(Token.COLON);
+        currentAccess = spec.lexem;
+        continue;
+      }
+
+      // Parse the field as a regular variable (without an initializer, for now)
+      const modifiers = [];
+      while (this.is_modifier(this.stream.peek())) modifiers.push(this.stream.next());
+
+      const typeNode = this.parse_expression(Precedence.ASSIGNMENT, false, true);
+      const fieldNameNode = this.parse_expression(Precedence.POSTFIX);
+      
+      // Array-field: char data[64];
+      let fieldArrayDims: any[] | null = null;
+      while (this.stream.is(Token.OPEN_SQUARE_BRACKET)) {
+        if (!fieldArrayDims) fieldArrayDims = [];
+        this.stream.next();
+        if (!this.stream.is(Token.CLOSE_SQUARE_BRACKET)) {
+          fieldArrayDims.push(this.parse_expression(Precedence.LOWEST));
+        } else {
+          fieldArrayDims.push(null);
+        }
+        this.stream.expect(Token.CLOSE_SQUARE_BRACKET);
+      }
+      
+      this.stream.expect(Token.SEMICOLON);
+
+      fields.push(new Syntax.RegistryMap[Syntax.Kind.VariableDeclaration]({
+        kind: Syntax.Kind.VariableDeclaration,
+        modifiers,
+        typeNode,
+        name: fieldNameNode as any,
+        initializer: null,
+        arrayDimensions: fieldArrayDims ?? undefined,
+        _access: currentAccess
+      }));
+    }
+
+    this.stream.expect(Token.CLOSE_CURLY_BRACKET);
+    this.stream.consume_if(Token.SEMICOLON); // struct Foo {};
+
+    return new Syntax.RegistryMap[Syntax.Kind.StructDeclaration]({
+      kind: Syntax.Kind.StructDeclaration,
+      name: nameNode,
+      fields
+    });
+  }
+
+  parse_namespace_declaration(): Syntax.Node<Syntax.Kind.NamespaceDeclaration> {
+    this.stream.next(); // consume 'namespace' keyword
+    let name = null, body;
+
+    // namespace {} or namespace name {}
+    if (this.stream.is(Token.IDENTIFIER)) {
+      name = this.stream.next();
+    }
+
+    const peek = this.stream.peek();
+    if (peek && peek.type == Token.OPEN_CURLY_BRACKET) {
+      body = this.parse_block();
+      this.stream.consume_if(Token.SEMICOLON);
+    } else {
+      new exceptions.ExpressionException("Expected namespace body '{ ... }'", peek);
+    }
+
+    return new Syntax.RegistryMap[Syntax.Kind.NamespaceDeclaration]({ name, body });
+  }
+
+  parse_enumeration_declaration(): Syntax.Node<Syntax.Kind.EnumerationDeclaration> {
+    this.stream.next(); // consume 'enum'
+    const nameToken = this.stream.expect(Token.IDENTIFIER);
+    this.stream.expect(Token.OPEN_CURLY_BRACKET);
+
+    const members = [];
+    while (!this.stream.is(Token.CLOSE_CURLY_BRACKET) && !this.stream.is(Token.EOF)) {
+      // The Rust-style variant is parsed as a function call: Circle(f32)
+      const variantNode = this.parse_expression(Precedence.LOWEST);
+      this.stream.consume_if(Token.COMMA);
+      members.push(variantNode);
+    }
+
+    this.stream.expect(Token.CLOSE_CURLY_BRACKET);
+    this.stream.consume_if(Token.SEMICOLON);
+
+    return new Syntax.RegistryMap[Syntax.Kind.EnumerationDeclaration]({
+      kind: Syntax.Kind.EnumerationDeclaration,
+      modifiers: [],
+      name: nameToken,
+      members: members
+    });
+  }
+
+  parse_union_declaration(): Syntax.Node<Syntax.Kind.UnionDeclaration> {
+    this.stream.next(); // consume 'union'
+    const nameToken = this.stream.expect(Token.IDENTIFIER);
+    this.stream.expect(Token.OPEN_CURLY_BRACKET);
+
+    const variants = [];
+    while (!this.stream.is(Token.CLOSE_CURLY_BRACKET) && !this.stream.is(Token.EOF)) {
+      // The Rust-style variant is parsed as a function call: Circle(f32)
+      const variantNode = this.parse_variant_declaration();
+      this.stream.consume_if(Token.COMMA);
+      variants.push(variantNode);
+    }
+
+    this.stream.expect(Token.CLOSE_CURLY_BRACKET);
+    this.stream.consume_if(Token.SEMICOLON);
+
+    const variantsList = new Syntax.RegistryMap[Syntax.Kind.List]({
+      kind: Syntax.Kind.List,
+      elements: variants
+    });
+
+    return new Syntax.RegistryMap[Syntax.Kind.UnionDeclaration]({
+      kind: Syntax.Kind.UnionDeclaration,
+      modifiers: [],
+      name: nameToken,
+      variants: variantsList
+    });
+  }
+
+  private parse_template_declaration(): Syntax.NodeStructure {
+    this.stream.next(); // consume 'template'
+    this.stream.expect(Token.LESS); // <
+
+    const elements = [];
+    while (!this.stream.is(Token.GREATER) && !this.stream.is(Token.EOF)) {
+      if (ReserveIdentifierCoder.is(this.stream.peek()!, ReserveIdentifier.RID_TYPENAME)) {
+        this.stream.next(); // consume 'typename'
+      }
+
+      // Template type name (for example, T)
+      const typeParamToken = this.stream.expect(Token.IDENTIFIER);
+      elements.push(new Syntax.NodeShape<Syntax.Kind.Identifier>({
+        kind: Syntax.Kind.Identifier,
+        token: typeParamToken
+      }));
+
+      this.stream.consume_if(Token.COMMA);
+    }
+
+    this.expect_greater(); // >
+
+    const genericsNode = new Syntax.RegistryMap[Syntax.Kind.Generics]({
+      kind: Syntax.Kind.Generics,
+      elements: elements
+    });
+
+    // Now let's look at what comes after template<...>
+    const nextToken = this.stream.peek();
+    if (!nextToken) {
+      new exceptions.ExpressionException("Unexpected EOF after template declaration", this.stream.peek());
+    }
+
+    if (ReserveIdentifierCoder.is(nextToken, ReserveIdentifier.RID_STRUCT)) {
+      const structDecl = this.parse_struct_declaration();
+      (structDecl as any).templateParams = genericsNode;
+      return structDecl as any;
+    }
+
+    // If this is a function, parse the modifiers and the declaration.
+    const modifiers = [];
+    while (this.is_modifier(this.stream.peek())) {
+      modifiers.push(this.stream.next());
+    }
+
+    if (this.is_decl_qualifier(this.stream.peek())) {
+      const fnDecl = this.parse_functional_declaration(modifiers);
+      fnDecl.templateParams = genericsNode;
+      return fnDecl as any;
+    }
+
+    new exceptions.ExpressionException("Expected struct or function declaration after template", nextToken);
+    return null as any;
+  }
+
+  private parse_inspect_statement(): Syntax.Node<Syntax.Kind.InspectStatement> {
+    this.stream.next(); // consume 'inspect'
+
+    this.stream.expect(Token.OPEN_PAREN);
+    const target = this.parse_expression(Precedence.LOWEST);
+    this.stream.expect(Token.CLOSE_PAREN);
+
+    this.stream.expect(Token.OPEN_CURLY_BRACKET);
+    const cases: any[] = [];
+
+    while (!this.stream.is(Token.CLOSE_CURLY_BRACKET) && !this.stream.is(Token.EOF)) {
+      // 1. Pattern (can be Shape::Circle(r), Color::RED, or simply '_' for default)
+      let patternNode: any = null;
+
+      if (this.stream.peek()?.lexem === "_") { // Default case '_'
+        const token = this.stream.next()!;
+        patternNode = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
+          selector: new Syntax.NodeShape<Syntax.Kind.Identifier>({ kind: Syntax.Kind.Identifier, token })
+        });
+      } else {
+        patternNode = this.parse_expression(Precedence.ASSIGNMENT); // Shape::Circle(r)
+      }
+
+      // 2. PATTERN_CASE (=>) operator
+      this.stream.expect(Token.PATTERN_CASE);
+
+      // 3. Case Body (A code block or a single expression—though, for now, we will make the block mandatory)
+      const body = this.parse_block();
+
+      // Optional comma (in Rust, placing a comma between cases containing blocks is not required, but is permitted).
+      this.stream.consume_if(Token.COMMA);
+
+      cases.push(new Syntax.RegistryMap[Syntax.Kind.InspectCase]({
+        kind: Syntax.Kind.InspectCase,
+        pattern: patternNode,
+        body
+      }));
+    }
+
+    this.stream.expect(Token.CLOSE_CURLY_BRACKET);
+
+    return new Syntax.RegistryMap[Syntax.Kind.InspectStatement]({
+      kind: Syntax.Kind.InspectStatement,
+      target,
+      cases
+    });
+  }
+
+
+  private parse_variant_declaration() {
+    let variantNode: any;
+
+    if (this.stream.peek()?.type === Token.IDENTIFIER) {
+      const token = this.stream.next()!;
+      variantNode = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
+        selector: new Syntax.NodeShape<Syntax.Kind.Identifier>({ kind: Syntax.Kind.Identifier, token })
+      });
+    } else {
+      variantNode = this.parse_expression(Precedence.POSTFIX);
+    }
+
+    if (this.stream.consume_if(Token.OPEN_PAREN)) {
+      const parameters = [];
+      if (!this.stream.is(Token.CLOSE_PAREN)) {
+        do {
+          // Important: Pass isTypeContext = true so that pointers (*) and CV-qualifiers (const) are parsed correctly!
+          parameters.push(this.parse_expression(Precedence.ASSIGNMENT, false, true));
+        } while (this.stream.consume_if(Token.COMMA));
+      }
+      this.stream.expect(Token.CLOSE_PAREN);
+
+      variantNode = new Syntax.RegistryMap[Syntax.Kind.Call]({
+        kind: Syntax.Kind.Call,
+        caller: variantNode,
+        parameters: parameters
+      });
+    }
+
+    return variantNode;
   }
 
   // =================================================================
@@ -748,6 +1214,36 @@ class RecursiveDescentParser {
   // HELPERS
   // =================================================================
 
+  private lookahead_is_generic(): boolean {
+    const peek = this.stream.peek(1);
+    if (!peek) return false;
+
+    // empty generic aka T<>
+    if (TokenOf.is(peek, Token.GREATER)) return true;
+
+    if (peek.type == Token.IDENTIFIER) {
+      const p2 = this.stream.peek(2);
+      if (!p2) return false;
+      // Patterns generic
+      if (TokenOf.is(p2, Token.GREATER)) return true;       // <T>
+      if (TokenOf.is(p2, Token.COMMA)) return true;         // <T, U>
+      if (TokenOf.is(p2, Token.RIGHT_SHIFT)) return true;   // <T, <T>>
+      if (TokenOf.is(p2, Token.STAR)) return true;          // <T*>
+      if (TokenOf.is(p2, Token.AMPERSAND)) return true;     // <T&>
+      if (TokenOf.is(p2, Token.OPERATOR_AND)) return true;  // <T&&>
+      if (TokenOf.is(p2, Token.SCOPE)) return true;         // <T::U>
+      if (TokenOf.is(p2, Token.LESS)) return true;          // <T<U>>
+
+      if (RecursiveDescentParser.is_cv_modifier(peek)) {
+        if (TokenOf.is(p2, Token.IDENTIFIER)) return true; // <const T>
+      }
+
+      return false;
+    }
+
+    return false;
+  }
+
   private is_modifier(token: StructToken | undefined): boolean {
     if (!token) return false;
     return [
@@ -759,7 +1255,32 @@ class RecursiveDescentParser {
       ReserveIdentifierCoder.is(token, ReserveIdentifier.RID___INIT),
       ReserveIdentifierCoder.is(token, ReserveIdentifier.RID___EXIT),
       ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_SHARE_SYMBOL),
+      // access modifiers
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PUBLIC),
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PRIVATE),
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PROTECTED),
     ].includes(true);
+  }
+
+  static is_access_modifier(token: StructToken | undefined): boolean {
+    if (!token) return false;
+    return [
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PUBLIC),
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PRIVATE),
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_PROTECTED)
+    ].includes(true);
+  }
+
+  static is_cv_modifier(token: StructToken | undefined): boolean {
+    if (!token) return false;
+    return [
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_CONST),
+      ReserveIdentifierCoder.is(token, ReserveIdentifier.RID_VOLATILE)
+    ].includes(true);
+  }
+
+  private is_access_modifier_label(token: StructToken | undefined): boolean {
+    return RecursiveDescentParser.is_access_modifier(token) && this.stream.peek(1).type == Token.COLON;
   }
 
   private is_decl_qualifier(token: StructToken | undefined): boolean {
@@ -815,7 +1336,7 @@ class RecursiveDescentParser {
       case Token.LESS:
       case Token.LESS_EQUAL:
       case Token.GREATER_EQUAL: return Precedence.RELATIONAL;
-  
+
       case Token.GREATER:
         return this.isGreaterThanOperator ? Precedence.RELATIONAL : Precedence.LOWEST;
 

@@ -1,10 +1,10 @@
-;; int add(int a as %rdi, int b as %rsi)
+// int add(int a as %rdi, int b as %rsi)
 __share__ fn add() {
   @mov %rdi, %rax
   @add %rsi, %rax                  
 }
 
-;; int sub(int a, int b)
+// int sub(int a, int b)
 __share__ fn sub() {
   @mov %rdi, %rax
   @sub %rsi, %rax
@@ -25,5 +25,6 @@ fn _local() {
 fn somefunc {}
 
 __share__ fn lc_print() {
-  @call _local;
+  // @call _local;
+  _local();
 }

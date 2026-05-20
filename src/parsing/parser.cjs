@@ -54,6 +54,39 @@ class RecursiveDescentParser {
         if (token.type == token_cjs_1.Token.DOGE) {
             return this.parse_instruction();
         }
+        // if (token.type === Token.OPEN_CURLY_BRACKET) {
+        //   return this.parse_block();
+        // }
+        if (token.type === token_cjs_1.Token.IDENTIFIER) {
+            if (token.lexem === "if")
+                return this.parse_if_statement();
+            if (token.lexem === "while")
+                return this.parse_while_statement();
+            if (token.lexem === "return")
+                return this.parse_return_statement();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_BREAK))
+                return this.parse_jump_statement();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_CONTINUE))
+                return this.parse_jump_statement();
+            if (this.stream.peek(1).type == token_cjs_1.Token.COLON && this.is_access_modifier_label(token) == false) {
+                const afterColon = this.stream.peek(2);
+                if (afterColon && (token_cjs_1.ReserveIdentifierCoder.is(afterColon, token_cjs_1.ReserveIdentifier.RID_WHILE))) {
+                    return this.parse_label_statement();
+                }
+            }
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_TEMPLATE))
+                return this.parse_template_declaration();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_INSPECT))
+                return this.parse_inspect_statement();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_STRUCT))
+                return this.parse_struct_declaration();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_NAMESPACE))
+                return this.parse_namespace_declaration();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_ENUM))
+                return this.parse_enumeration_declaration();
+            if (token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_UNION))
+                return this.parse_union_declaration();
+        }
         {
             const modifiers = [];
             while (this.is_modifier(this.stream.peek())) {
@@ -156,6 +189,21 @@ class RecursiveDescentParser {
     }
     parse_variable_declaration(modifiers, typeNode) {
         const nameNode = this.parse_expression(Precedence.POSTFIX);
+        // Array dimensions: char buffer[32]  /  int arr[N][M]
+        let arrayDimensions = [];
+        // check array dimensions
+        while (this.stream.is(token_cjs_1.Token.OPEN_SQUARE_BRACKET)) {
+            if (!arrayDimensions)
+                arrayDimensions = [];
+            this.stream.next(); // consume [
+            if (!this.stream.is(token_cjs_1.Token.CLOSE_SQUARE_BRACKET)) {
+                arrayDimensions.push(this.parse_expression(Precedence.LOWEST));
+            }
+            else {
+                arrayDimensions.push(null); // unsized: char buf[]
+            }
+            this.stream.expect(token_cjs_1.Token.CLOSE_SQUARE_BRACKET);
+        }
         let initializer = null;
         // check initializer ( = expr) or (= { })
         const peek = this.stream.peek();
@@ -173,7 +221,8 @@ class RecursiveDescentParser {
             modifiers,
             typeNode,
             name: nameNode,
-            initializer
+            initializer,
+            arrayDimensions: arrayDimensions ?? undefined
         });
         return node;
     }
@@ -313,8 +362,55 @@ class RecursiveDescentParser {
             const token = this.stream.peek();
             if (!token)
                 break;
+            if (token.type === token_cjs_1.Token.LESS) {
+                if (left.kind === expression_cjs_1.Syntax.Kind.Identifier && this.lookahead_is_generic()) {
+                    const snapshot = this.stream.snapshot();
+                    let isGeneric = false;
+                    let genericsNode = null;
+                    try {
+                        genericsNode = this.withAngleBrackets(() => {
+                            this.stream.next(); // consume '<'
+                            const elements = [];
+                            if (!this.stream.is(token_cjs_1.Token.GREATER)) {
+                                do {
+                                    elements.push(this.parse_expression(Precedence.ASSIGNMENT, false, true));
+                                } while (this.stream.consume_if(token_cjs_1.Token.COMMA));
+                            }
+                            // Silent check: DO NOT call `expect_greater()` immediately,
+                            // to avoid logging errors during speculative parsing.
+                            if (!this.stream.is(token_cjs_1.Token.GREATER) &&
+                                !this.stream.is(token_cjs_1.Token.RIGHT_SHIFT) &&
+                                !this.stream.is(token_cjs_1.Token.GREATER_EQUAL)) {
+                                throw new Error("speculative_not_generic");
+                            }
+                            this.expect_greater();
+                            return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Generics]({ elements });
+                        });
+                        isGeneric = true;
+                    }
+                    catch (error) {
+                        if (isTypeContext && error?.message !== "speculative_not_generic") {
+                            throw error;
+                        }
+                        this.stream.restore(snapshot);
+                        isGeneric = false;
+                    }
+                    if (isGeneric) {
+                        left = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Identifier]({
+                            kind: expression_cjs_1.Syntax.Kind.Identifier,
+                            selector: left,
+                            generics: genericsNode
+                        });
+                        continue;
+                    }
+                }
+            }
             if (this.stream.is(token_cjs_1.Token.OPEN_PAREN)) {
                 left = this.parse_function_call(left);
+                continue;
+            }
+            if (token.type === token_cjs_1.Token.OPEN_SQUARE_BRACKET) {
+                left = this.parse_subscript_expression(left);
                 continue;
             }
             if (this.stream.is(token_cjs_1.Token.DOT) || this.stream.is(token_cjs_1.Token.SCOPE) || this.stream.is(token_cjs_1.Token.ARROW)) {
@@ -325,7 +421,8 @@ class RecursiveDescentParser {
                     kind: expression_cjs_1.Syntax.Kind.Identifier,
                     operator,
                     selector: left,
-                    forward: right
+                    forward: right,
+                    _isThisAccess: left.kind == expression_cjs_1.Syntax.Kind.ThisLiteral
                 });
                 continue;
             }
@@ -499,6 +596,12 @@ class RecursiveDescentParser {
         });
         return node;
     }
+    parse_subscript_expression(left) {
+        const bracketToken = this.stream.expect(token_cjs_1.Token.OPEN_SQUARE_BRACKET);
+        const index = this.parse_expression(Precedence.LOWEST);
+        this.stream.expect(token_cjs_1.Token.CLOSE_SQUARE_BRACKET);
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.SubscriptExpression]({ base: left, index, bracketToken });
+    }
     parse_primary() {
         const token = this.stream.peek();
         if (token?.type == token_cjs_1.Token.NUMBER) {
@@ -536,13 +639,9 @@ class RecursiveDescentParser {
                     value: token
                 });
             }
-            // if (ReserveIdentifierCoder.is(idToken, ReserveIdentifier.RID_NULL)) {
-            //   return new Syntax.RegistryMap[Syntax.Kind.Literal]({
-            //     kind: Syntax.Kind.Literal,
-            //     type: Syntax.Type.NullLiteral,
-            //     value: token
-            //   });
-            // }
+            if (token_cjs_1.ReserveIdentifierCoder.is(idToken, token_cjs_1.ReserveIdentifier.RID_THIS)) {
+                return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.ThisLiteral]({ token });
+            }
             const idNode = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Identifier]({
                 selector: new expression_cjs_1.Syntax.NodeShape({
                     kind: expression_cjs_1.Syntax.Kind.Identifier,
@@ -574,6 +673,305 @@ class RecursiveDescentParser {
         }
         this.stream.expect(close);
         return seq;
+    }
+    // =================================================================
+    // CONTROL FLOW
+    // =================================================================
+    parse_block_or_statement() {
+        if (this.stream.is(token_cjs_1.Token.OPEN_CURLY_BRACKET)) {
+            return this.parse_block();
+        }
+        return this.parse_statement();
+    }
+    parse_if_statement() {
+        this.stream.next(); // consume 'if'
+        this.stream.expect(token_cjs_1.Token.OPEN_PAREN);
+        const condition = this.parse_expression(Precedence.LOWEST);
+        this.stream.expect(token_cjs_1.Token.CLOSE_PAREN);
+        const thenBranch = this.parse_block_or_statement();
+        let elseBranch = null;
+        const next = this.stream.peek();
+        if (next && next.type === token_cjs_1.Token.IDENTIFIER && next.lexem === "else") {
+            this.stream.next(); // consume 'else'
+            elseBranch = this.parse_block_or_statement();
+        }
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.IfStatement]({
+            kind: expression_cjs_1.Syntax.Kind.IfStatement,
+            condition,
+            thenBranch,
+            elseBranch
+        });
+    }
+    parse_while_statement() {
+        this.stream.next(); // consume 'while'
+        this.stream.expect(token_cjs_1.Token.OPEN_PAREN);
+        const condition = this.parse_expression(Precedence.LOWEST);
+        this.stream.expect(token_cjs_1.Token.CLOSE_PAREN);
+        const body = this.parse_block_or_statement();
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.WhileStatement]({
+            kind: expression_cjs_1.Syntax.Kind.WhileStatement,
+            condition,
+            body
+        });
+    }
+    parse_jump_statement() {
+        const jumpTypeToken = this.stream.next();
+        let label = undefined;
+        if (this.stream.peek()?.type === token_cjs_1.Token.IDENTIFIER) {
+            label = this.stream.next();
+        }
+        this.stream.expect(token_cjs_1.Token.SEMICOLON);
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.JumpStatement]({
+            kind: expression_cjs_1.Syntax.Kind.JumpStatement,
+            jumpKind: jumpTypeToken.lexem,
+            label
+        });
+    }
+    parse_label_statement() {
+        const nameToken = this.stream.next();
+        this.stream.expect(token_cjs_1.Token.COLON);
+        const statement = this.parse_statement();
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.LabelStatement]({
+            kind: expression_cjs_1.Syntax.Kind.LabelStatement,
+            name: nameToken,
+            statement
+        });
+    }
+    parse_return_statement() {
+        this.stream.next(); // consume 'return'
+        let expression = null;
+        if (!this.stream.is(token_cjs_1.Token.SEMICOLON)) {
+            expression = this.parse_expression(Precedence.LOWEST);
+        }
+        this.stream.expect(token_cjs_1.Token.SEMICOLON);
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.ReturnStatement]({
+            kind: expression_cjs_1.Syntax.Kind.ReturnStatement,
+            expression
+        });
+    }
+    parse_struct_declaration() {
+        this.stream.next(); // consume 'struct' keyword
+        const nameToken = this.stream.expect(token_cjs_1.Token.IDENTIFIER);
+        const nameNode = new expression_cjs_1.Syntax.NodeShape({ kind: expression_cjs_1.Syntax.Kind.Identifier, token: nameToken });
+        this.stream.expect(token_cjs_1.Token.OPEN_CURLY_BRACKET);
+        const fields = [];
+        let currentAccess = token_cjs_1.ReserveIdentifier.RID_PUBLIC;
+        while (!this.stream.is(token_cjs_1.Token.CLOSE_CURLY_BRACKET) && !this.stream.is(token_cjs_1.Token.EOF)) {
+            if (this.is_access_modifier_label(this.stream.peek())) {
+                const spec = this.stream.next();
+                this.stream.expect(token_cjs_1.Token.COLON);
+                currentAccess = spec.lexem;
+                continue;
+            }
+            // Parse the field as a regular variable (without an initializer, for now)
+            const modifiers = [];
+            while (this.is_modifier(this.stream.peek()))
+                modifiers.push(this.stream.next());
+            const typeNode = this.parse_expression(Precedence.ASSIGNMENT, false, true);
+            const fieldNameNode = this.parse_expression(Precedence.POSTFIX);
+            // Array-field: char data[64];
+            let fieldArrayDims = null;
+            while (this.stream.is(token_cjs_1.Token.OPEN_SQUARE_BRACKET)) {
+                if (!fieldArrayDims)
+                    fieldArrayDims = [];
+                this.stream.next();
+                if (!this.stream.is(token_cjs_1.Token.CLOSE_SQUARE_BRACKET)) {
+                    fieldArrayDims.push(this.parse_expression(Precedence.LOWEST));
+                }
+                else {
+                    fieldArrayDims.push(null);
+                }
+                this.stream.expect(token_cjs_1.Token.CLOSE_SQUARE_BRACKET);
+            }
+            this.stream.expect(token_cjs_1.Token.SEMICOLON);
+            fields.push(new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.VariableDeclaration]({
+                kind: expression_cjs_1.Syntax.Kind.VariableDeclaration,
+                modifiers,
+                typeNode,
+                name: fieldNameNode,
+                initializer: null,
+                arrayDimensions: fieldArrayDims ?? undefined,
+                _access: currentAccess
+            }));
+        }
+        this.stream.expect(token_cjs_1.Token.CLOSE_CURLY_BRACKET);
+        this.stream.consume_if(token_cjs_1.Token.SEMICOLON); // struct Foo {};
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.StructDeclaration]({
+            kind: expression_cjs_1.Syntax.Kind.StructDeclaration,
+            name: nameNode,
+            fields
+        });
+    }
+    parse_namespace_declaration() {
+        this.stream.next(); // consume 'namespace' keyword
+        let name = null, body;
+        // namespace {} or namespace name {}
+        if (this.stream.is(token_cjs_1.Token.IDENTIFIER)) {
+            name = this.stream.next();
+        }
+        const peek = this.stream.peek();
+        if (peek && peek.type == token_cjs_1.Token.OPEN_CURLY_BRACKET) {
+            body = this.parse_block();
+            this.stream.consume_if(token_cjs_1.Token.SEMICOLON);
+        }
+        else {
+            new exceptions.ExpressionException("Expected namespace body '{ ... }'", peek);
+        }
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.NamespaceDeclaration]({ name, body });
+    }
+    parse_enumeration_declaration() {
+        this.stream.next(); // consume 'enum'
+        const nameToken = this.stream.expect(token_cjs_1.Token.IDENTIFIER);
+        this.stream.expect(token_cjs_1.Token.OPEN_CURLY_BRACKET);
+        const members = [];
+        while (!this.stream.is(token_cjs_1.Token.CLOSE_CURLY_BRACKET) && !this.stream.is(token_cjs_1.Token.EOF)) {
+            // The Rust-style variant is parsed as a function call: Circle(f32)
+            const variantNode = this.parse_expression(Precedence.LOWEST);
+            this.stream.consume_if(token_cjs_1.Token.COMMA);
+            members.push(variantNode);
+        }
+        this.stream.expect(token_cjs_1.Token.CLOSE_CURLY_BRACKET);
+        this.stream.consume_if(token_cjs_1.Token.SEMICOLON);
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.EnumerationDeclaration]({
+            kind: expression_cjs_1.Syntax.Kind.EnumerationDeclaration,
+            modifiers: [],
+            name: nameToken,
+            members: members
+        });
+    }
+    parse_union_declaration() {
+        this.stream.next(); // consume 'union'
+        const nameToken = this.stream.expect(token_cjs_1.Token.IDENTIFIER);
+        this.stream.expect(token_cjs_1.Token.OPEN_CURLY_BRACKET);
+        const variants = [];
+        while (!this.stream.is(token_cjs_1.Token.CLOSE_CURLY_BRACKET) && !this.stream.is(token_cjs_1.Token.EOF)) {
+            // The Rust-style variant is parsed as a function call: Circle(f32)
+            const variantNode = this.parse_variant_declaration();
+            this.stream.consume_if(token_cjs_1.Token.COMMA);
+            variants.push(variantNode);
+        }
+        this.stream.expect(token_cjs_1.Token.CLOSE_CURLY_BRACKET);
+        this.stream.consume_if(token_cjs_1.Token.SEMICOLON);
+        const variantsList = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.List]({
+            kind: expression_cjs_1.Syntax.Kind.List,
+            elements: variants
+        });
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.UnionDeclaration]({
+            kind: expression_cjs_1.Syntax.Kind.UnionDeclaration,
+            modifiers: [],
+            name: nameToken,
+            variants: variantsList
+        });
+    }
+    parse_template_declaration() {
+        this.stream.next(); // consume 'template'
+        this.stream.expect(token_cjs_1.Token.LESS); // <
+        const elements = [];
+        while (!this.stream.is(token_cjs_1.Token.GREATER) && !this.stream.is(token_cjs_1.Token.EOF)) {
+            if (token_cjs_1.ReserveIdentifierCoder.is(this.stream.peek(), token_cjs_1.ReserveIdentifier.RID_TYPENAME)) {
+                this.stream.next(); // consume 'typename'
+            }
+            // Template type name (for example, T)
+            const typeParamToken = this.stream.expect(token_cjs_1.Token.IDENTIFIER);
+            elements.push(new expression_cjs_1.Syntax.NodeShape({
+                kind: expression_cjs_1.Syntax.Kind.Identifier,
+                token: typeParamToken
+            }));
+            this.stream.consume_if(token_cjs_1.Token.COMMA);
+        }
+        this.expect_greater(); // >
+        const genericsNode = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Generics]({
+            kind: expression_cjs_1.Syntax.Kind.Generics,
+            elements: elements
+        });
+        // Now let's look at what comes after template<...>
+        const nextToken = this.stream.peek();
+        if (!nextToken) {
+            new exceptions.ExpressionException("Unexpected EOF after template declaration", this.stream.peek());
+        }
+        if (token_cjs_1.ReserveIdentifierCoder.is(nextToken, token_cjs_1.ReserveIdentifier.RID_STRUCT)) {
+            const structDecl = this.parse_struct_declaration();
+            structDecl.templateParams = genericsNode;
+            return structDecl;
+        }
+        // If this is a function, parse the modifiers and the declaration.
+        const modifiers = [];
+        while (this.is_modifier(this.stream.peek())) {
+            modifiers.push(this.stream.next());
+        }
+        if (this.is_decl_qualifier(this.stream.peek())) {
+            const fnDecl = this.parse_functional_declaration(modifiers);
+            fnDecl.templateParams = genericsNode;
+            return fnDecl;
+        }
+        new exceptions.ExpressionException("Expected struct or function declaration after template", nextToken);
+        return null;
+    }
+    parse_inspect_statement() {
+        this.stream.next(); // consume 'inspect'
+        this.stream.expect(token_cjs_1.Token.OPEN_PAREN);
+        const target = this.parse_expression(Precedence.LOWEST);
+        this.stream.expect(token_cjs_1.Token.CLOSE_PAREN);
+        this.stream.expect(token_cjs_1.Token.OPEN_CURLY_BRACKET);
+        const cases = [];
+        while (!this.stream.is(token_cjs_1.Token.CLOSE_CURLY_BRACKET) && !this.stream.is(token_cjs_1.Token.EOF)) {
+            // 1. Pattern (can be Shape::Circle(r), Color::RED, or simply '_' for default)
+            let patternNode = null;
+            if (this.stream.peek()?.lexem === "_") { // Default case '_'
+                const token = this.stream.next();
+                patternNode = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Identifier]({
+                    selector: new expression_cjs_1.Syntax.NodeShape({ kind: expression_cjs_1.Syntax.Kind.Identifier, token })
+                });
+            }
+            else {
+                patternNode = this.parse_expression(Precedence.ASSIGNMENT); // Shape::Circle(r)
+            }
+            // 2. PATTERN_CASE (=>) operator
+            this.stream.expect(token_cjs_1.Token.PATTERN_CASE);
+            // 3. Case Body (A code block or a single expression—though, for now, we will make the block mandatory)
+            const body = this.parse_block();
+            // Optional comma (in Rust, placing a comma between cases containing blocks is not required, but is permitted).
+            this.stream.consume_if(token_cjs_1.Token.COMMA);
+            cases.push(new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.InspectCase]({
+                kind: expression_cjs_1.Syntax.Kind.InspectCase,
+                pattern: patternNode,
+                body
+            }));
+        }
+        this.stream.expect(token_cjs_1.Token.CLOSE_CURLY_BRACKET);
+        return new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.InspectStatement]({
+            kind: expression_cjs_1.Syntax.Kind.InspectStatement,
+            target,
+            cases
+        });
+    }
+    parse_variant_declaration() {
+        let variantNode;
+        if (this.stream.peek()?.type === token_cjs_1.Token.IDENTIFIER) {
+            const token = this.stream.next();
+            variantNode = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Identifier]({
+                selector: new expression_cjs_1.Syntax.NodeShape({ kind: expression_cjs_1.Syntax.Kind.Identifier, token })
+            });
+        }
+        else {
+            variantNode = this.parse_expression(Precedence.POSTFIX);
+        }
+        if (this.stream.consume_if(token_cjs_1.Token.OPEN_PAREN)) {
+            const parameters = [];
+            if (!this.stream.is(token_cjs_1.Token.CLOSE_PAREN)) {
+                do {
+                    // Important: Pass isTypeContext = true so that pointers (*) and CV-qualifiers (const) are parsed correctly!
+                    parameters.push(this.parse_expression(Precedence.ASSIGNMENT, false, true));
+                } while (this.stream.consume_if(token_cjs_1.Token.COMMA));
+            }
+            this.stream.expect(token_cjs_1.Token.CLOSE_PAREN);
+            variantNode = new expression_cjs_1.Syntax.RegistryMap[expression_cjs_1.Syntax.Kind.Call]({
+                kind: expression_cjs_1.Syntax.Kind.Call,
+                caller: variantNode,
+                parameters: parameters
+            });
+        }
+        return variantNode;
     }
     get isGreaterThanOperator() {
         return this.angleBracketIsOperator[this.angleBracketIsOperator.length - 1];
@@ -623,6 +1021,42 @@ class RecursiveDescentParser {
     // =================================================================
     // HELPERS
     // =================================================================
+    lookahead_is_generic() {
+        const peek = this.stream.peek(1);
+        if (!peek)
+            return false;
+        // empty generic aka T<>
+        if (token_cjs_1.TokenOf.is(peek, token_cjs_1.Token.GREATER))
+            return true;
+        if (peek.type == token_cjs_1.Token.IDENTIFIER) {
+            const p2 = this.stream.peek(2);
+            if (!p2)
+                return false;
+            // Patterns generic
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.GREATER))
+                return true; // <T>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.COMMA))
+                return true; // <T, U>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.RIGHT_SHIFT))
+                return true; // <T, <T>>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.STAR))
+                return true; // <T*>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.AMPERSAND))
+                return true; // <T&>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.OPERATOR_AND))
+                return true; // <T&&>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.SCOPE))
+                return true; // <T::U>
+            if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.LESS))
+                return true; // <T<U>>
+            if (RecursiveDescentParser.is_cv_modifier(peek)) {
+                if (token_cjs_1.TokenOf.is(p2, token_cjs_1.Token.IDENTIFIER))
+                    return true; // <const T>
+            }
+            return false;
+        }
+        return false;
+    }
     is_modifier(token) {
         if (!token)
             return false;
@@ -634,7 +1068,31 @@ class RecursiveDescentParser {
             token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID___INIT),
             token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID___EXIT),
             token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_SHARE_SYMBOL),
+            // access modifiers
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PUBLIC),
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PRIVATE),
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PROTECTED),
         ].includes(true);
+    }
+    static is_access_modifier(token) {
+        if (!token)
+            return false;
+        return [
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PUBLIC),
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PRIVATE),
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_PROTECTED)
+        ].includes(true);
+    }
+    static is_cv_modifier(token) {
+        if (!token)
+            return false;
+        return [
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_CONST),
+            token_cjs_1.ReserveIdentifierCoder.is(token, token_cjs_1.ReserveIdentifier.RID_VOLATILE)
+        ].includes(true);
+    }
+    is_access_modifier_label(token) {
+        return RecursiveDescentParser.is_access_modifier(token) && this.stream.peek(1).type == token_cjs_1.Token.COLON;
     }
     is_decl_qualifier(token) {
         if (!token)

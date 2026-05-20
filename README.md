@@ -92,7 +92,7 @@ asmx ./examples/g4/libm \
   --emergency-panic --verbose-common 10 \
   --use-raptor
 
-sudo gcc -o ./examples/test_main ./examples/libm_test.c -L. -lasmm
+sudo gcc -o ./examples/g4/test_main ./examples/g4/libm_test.c -L. -lasmm-v2
 
 LD_LIBRARY_PATH=. ./examples/g4/test_main
 ```

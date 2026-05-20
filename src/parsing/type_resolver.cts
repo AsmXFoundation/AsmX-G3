@@ -1,6 +1,8 @@
+import { Interpreter } from "../backend/targets/x86_64/raptor/interpreter.cjs";
 import { Syntax } from "../types/expression.cjs";
 import { StructToken } from "../types/token.cjs";
 import { UnwrapSyntax } from "../types/unwrap.cjs";
+import { MangleService } from "./mangle.cjs";
 import { TypeSystem } from "./type-checker.cjs";
 
 const exceptions = require("llvm.js/exceptions");
@@ -16,6 +18,19 @@ export interface NodeAnnotation {
   valueCategory?: TypeSystem.ValueCategory;
   implicitConversion?: ImplicitConversion;
   constValue?: ConstValue;
+
+  // For accessing structure fields
+  _isThisField?: boolean;
+  _fieldOffset?: number;
+  _fieldSize?: number;
+
+  _methodAccess?: "public" | "private" | "protected";
+
+  // For constructors: signature for overload resolution
+  _constructorSignature?: string;
+  _constructorCall?: any;
+
+  _mangledName?: string;
 }
 
 export enum StorageClass {
@@ -58,11 +73,12 @@ export namespace TypeResolver {
     modifiers: StructToken[],
     typeNode: Syntax.Node<any>,
     typeTable: TypeSystem.TypeTable,
-    reportToken: StructToken
+    reportToken: StructToken,
+    namespacePath: string[] = []
   ): TypeSystem.QualType {
     const base_cv = collect_cv_from_modifiers(modifiers);
 
-    const { type, cv } = resolve_inner(typeNode, typeTable, base_cv, reportToken);
+    const { type, cv } = resolve_inner(typeNode, typeTable, base_cv, reportToken, namespacePath);
     return new TypeSystem.QualType(type.kind, type, cv);
   }
 
@@ -84,21 +100,94 @@ export namespace TypeResolver {
     return cv;
   }
 
+  export function normalize_type_with_context(
+    qt: TypeSystem.QualType,
+    typeTable: TypeSystem.TypeTable
+  ): TypeSystem.QualType {
+    if (qt.type.name === "Self" && typeTable._currentStruct) {
+      const selfType = typeTable.lookup(typeTable._currentStruct);
+      if (selfType) {
+        return new TypeSystem.QualType(selfType.kind, selfType, qt.cv);
+      }
+    }
+    return qt.resolve();
+  }
+
   function resolve_inner(
     node: Syntax.NodeStructure,
     typeTable: TypeSystem.TypeTable,
     base_cv: TypeSystem.CVQualifier,
-    reportToken: StructToken
+    reportToken: StructToken,
+    namespacePath: string[] = []
   ): Resolved {
 
-    if (node.kind == Syntax.Kind.Identifier && !node.forward) {
-      const name = node.selector.token.lexem ?? UnwrapSyntax.unwrap(node).raw;
-      const found = typeTable.lookup(name);
+    if (node.kind == Syntax.Kind.Identifier) {
+      // We use emit_identifier, which resolves the structure (including generics).
+      const name = UnwrapSyntax.emit_identifier({ namespacePath }, node as any);
+
+      if (name === "Self" && typeTable._currentStruct) {
+        const selfType = typeTable.lookup(typeTable._currentStruct);
+        if (selfType) {
+          return { type: selfType, cv: base_cv };
+        }
+      }
+
+      let finalNameToLookup = name;
+      let typeArgsMangled = "";
+
+      // ⚡ Type instantiation (if it is a template)
+      if ((node as any).generics && (node as any).generics.elements.length > 0) {
+
+        // ⚡ AUTO-INSTANTIATION: Signaling to the semantics that we urgently need this type!
+        if (typeof (typeTable as any).onTemplateInstantiate === 'function') {
+          (typeTable as any).onTemplateInstantiate(name, (node as any).generics.elements, reportToken, namespacePath);
+        }
+
+        const typeArgs = (node as any).generics.elements.map((gNode: any) => {
+          const qt = TypeResolver.resolve_declaration_type([], gNode, typeTable, reportToken, namespacePath);
+          return MangleService.Mangler.mangle_qualtype(qt);
+        });
+
+        const mangledTemplateName = `${name}__${typeArgs.join("_")}`;
+
+        const found = typeTable.lookup(mangledTemplateName);
+        if (found) {
+          return { type: found, cv: base_cv };
+        } else {
+          new exceptions.ExpressionException(`Template '${name}' is not instantiated for types <${typeArgs.join(", ")}>`, reportToken);
+          return { type: typeTable.lookup(TypeSystem.PrimitiveTypeEnumeration.VOID)!, cv: base_cv };
+        }
+      }
+
+      // ⚡ SCALABLE NAMESPACE TYPE LOOKUP
+      let found: TypeSystem.AnyType | undefined = undefined;
+      for (let i = namespacePath.length; i >= 0; i--) {
+        const ns_prefix = namespacePath.slice(0, i).join("__");
+
+        // Substitute the namespace prefix, then append the template arguments.
+        // For example: ns="std", name="pair" -> "std__pair__7int32_t_PKc"
+        const try_base_name = ns_prefix ? (ns_prefix + "__" + name) : name;
+        const try_name = typeArgsMangled ? (try_base_name + typeArgsMangled) : try_base_name;
+
+        found = typeTable.lookup(try_name);
+        if (found) break;
+      }
+
       if (!found) {
-        new exceptions.ExpressionException(`Unknown type name '${name}'`, UnwrapSyntax.unwrap(node).token ?? reportToken);
-        // fallback — void
+        if (typeArgsMangled) {
+          new exceptions.ExpressionException(`Template '${name}' is not instantiated for types <${typeArgsMangled.substring(2).replace(/_/g, ', ')}>`, reportToken);
+        } else {
+          // Hack for the context within the template parsing itself, when types 'T' and 'U' are not yet known.
+          if ((typeTable as any)._isInTemplateContext) {
+            const templateType = new TypeSystem.PrimitiveType(name, 8, false);
+            return { type: templateType, cv: base_cv };
+          }
+
+          new exceptions.ExpressionException(`Unknown type name '${name}'`, UnwrapSyntax.unwrap(node).token ?? reportToken);
+        }
         return {type: typeTable.lookup(TypeSystem.PrimitiveTypeEnumeration.VOID)!, cv: base_cv};
       }
+
       return {type: found, cv: base_cv};
     }
 
@@ -107,7 +196,7 @@ export namespace TypeResolver {
     if (node.kind == Syntax.Kind.UnaryExpression) {
       const op = node.operator.lexem ?? "";
       
-      const inner = resolve_inner(node.operand, typeTable, base_cv, reportToken);
+      const inner = resolve_inner(node.operand, typeTable, base_cv, reportToken, namespacePath);
 
       switch (op) {
         case "*": {
@@ -158,7 +247,8 @@ export namespace TypeResolver {
   function resolve_function_pointer(
     node: Syntax.Node<Syntax.Kind.Call>,
     typeTable: TypeSystem.TypeTable,
-    reportToken: StructToken
+    reportToken: StructToken,
+    namespacePath: string[] = []
   ): Resolved {
     // Outer call: caller = inner call, args = parameter types
     const outer = node;
@@ -170,11 +260,11 @@ export namespace TypeResolver {
     }
 
     const ret_node = inner.caller;
-    const ret_resolved = resolve_inner(ret_node, typeTable, TypeSystem.NO_CV, reportToken);
+    const ret_resolved = resolve_inner(ret_node, typeTable, TypeSystem.NO_CV, reportToken, namespacePath);
     const ret_qt = new TypeSystem.QualType(ret_resolved.type.kind, ret_resolved.type, ret_resolved.cv);
 
     const params_qts: TypeSystem.QualType[] = (outer.parameters ?? []).map((p) => {
-      const r = resolve_inner(p, typeTable, TypeSystem.NO_CV, reportToken);
+      const r = resolve_inner(p, typeTable, TypeSystem.NO_CV, reportToken, namespacePath);
       return new TypeSystem.QualType(r.type.kind, r.type, r.cv);
     });
 
@@ -264,7 +354,10 @@ export namespace InitializerChecker {
 
       if (quote == "'") {
         const inner = raw.slice(1, -1);
-        if (inner.length !== 1) {
+        CharLiteralLabel: if (inner.length !== 1) {
+          if (Interpreter.string_view.interpretEscapeSequences(inner).length == 1) {
+            break CharLiteralLabel;
+          }
           new exceptions.ExpressionException("Multi-character character constant is not allowed", initNode.value);
         }
         const char_qt = new TypeSystem.QualType(char_t.kind, char_t, TypeSystem.NO_CV);

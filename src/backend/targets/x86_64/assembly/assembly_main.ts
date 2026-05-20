@@ -42,7 +42,11 @@ class impl_assembly_fn_base implements impl_assembly_fn_base {
 
   gen_allocate_local_variables(): Buffer {
     let buf = Buffer.alloc(0);
-    const locals_size = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    // const locals_size = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    // fn_locals_size may be set externally by the two-pass codegen path.
+    // Fall back to summing fn_locals[] for legacy callers.
+    const from_list = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    const locals_size = this.fn_locals_size > 0 ? this.fn_locals_size : from_list;
 
     if (locals_size == 0) {
       return buf;
@@ -67,7 +71,9 @@ class impl_assembly_fn_base implements impl_assembly_fn_base {
 
   gen_free_local_variables(): Buffer {
     let buf = Buffer.alloc(0);
-    const locals_size = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    // const locals_size = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    const from_list = this.fn_locals.map(l => l.size).reduce((a, b) => a + b, 0);
+    const locals_size = this.fn_locals_size > 0 ? this.fn_locals_size : from_list;
 
     if (locals_size == 0) {
       return buf;
@@ -123,19 +129,27 @@ class impl_assembly_fn_call extends impl_assembly_fn_base {}
 class impl_assembly_fn_pass_args_via_abi extends impl_assembly_fn_base {}
 
 // rettype main(T retqaddr, U argc, T1 argv, T2 envp, T3 auxv, T4 undefined_stackpalce)
-class impl_assembly_fn_main extends impl_assembly_fn_base {
-  impl() {
-    const buffer = Buffer.concat([
-      this.gen_prologue(),
-      this.gen_allocate_local_variables(),
-      this.fn_body,
-      this.gen_exit_syscall(),
-      this.gen_free_local_variables(),
-      this.gen_epilogue()
-    ]);
-    return buffer;
-  }
-}
+// class impl_assembly_fn_main extends impl_assembly_fn_base {
+//   impl() {
+//     const buffer = Buffer.concat([
+//       this.gen_prologue(),
+//       this.gen_allocate_local_variables(),
+//       this.fn_body,
+//       this.gen_exit_syscall(),
+//       this.gen_free_local_variables(),
+//       this.gen_epilogue()
+//     ]);
+//     return buffer;
+//   }
+// }
+
+//
+// NOTE: gen_exit_syscall() is intentionally NOT called here.
+// The AsmX source is expected to emit its own exit syscall
+// (@mov $60, %rax; @mov $0, %rdi; @syscall).  Appending it
+// automatically would produce a duplicate when the user writes it
+// explicitly, giving two consecutive "syscall" opcodes.
+class impl_assembly_fn_main extends impl_assembly_fn_base {}
 
 export {
   ApplicationBinaryInterface,

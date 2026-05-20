@@ -1,0 +1,821 @@
+# Changelog v32.0.0-rev1.0
+
+**Release date:** May 19, 2025
+**Target:** AsmX G3 Compiler — v32.0.0 (revision 1.0)
+
+---
+
+# Contnent
+- [AsmX-G3 Raptor Engine: Absolute Language Overview](#asmx-g3-raptor-engine-absolute-language-overview)
+  * [1. New Style Lexical Foundations](#1-new-style-lexical-foundations)
+  * [2. Recursive Module Expansion (AST Splicing)](#2-recursive-module-expansion-ast-splicing)
+  * [3. Namespaces and Deep AST Mangling](#3-namespaces-and-deep-ast-mangling)
+  * [4. Object-Oriented Struct Declarations](#4-object-oriented-struct-declarations)
+  * [5. Strict Access Modifiers](#5-strict-access-modifiers)
+  * [6. The Implicit `this` Pointer](#6-the-implicit-this-pointer)
+  * [7. Constructors and Destructors](#7-constructors-and-destructors)
+  * [8. Strictly Sequential Enumerations](#8-strictly-sequential-enumerations)
+  * [9. Hardware-Safe Tagged Unions](#9-hardware-safe-tagged-unions)
+  * [10. Pattern Matching (`inspect`)](#10-pattern-matching-inspect)
+  * [11. On-The-Fly Monomorphization (Generics)](#11-on-the-fly-monomorphization-generics)
+  * [12. Function Overloading and Mangling](#12-function-overloading-and-mangling)
+  * [13. Guaranteed Return Value Optimization (RVO)](#13-guaranteed-return-value-optimization-rvo)
+  * [14. SRET (Hidden Return Pointer ABI)](#14-sret-hidden-return-pointer-abi)
+  * [15, 16, 17. Complete Control Flow (`if`, `while`, `return`)](#15-16-17-complete-control-flow-if-while-return)
+  * [18. Labeled Jumps (`break`, `continue`)](#18-labeled-jumps-break-continue)
+  * [19. Magic `sizeof` Interception](#19-magic-sizeof-interception)
+  * [20. Subscript Indexing and Pointer Arithmetic](#20-subscript-indexing-and-pointer-arithmetic)
+  * [21. Expanded Instruction Set Architecture (ISA)](#21-expanded-instruction-set-architecture-isa)
+  * [22. Advanced Memory Operands (SIB Syntax)](#22-advanced-memory-operands-sib-syntax)
+- [Checklist of found language changes (Completeness Checklist)](#checklist-of-found-language-changes-completeness-checklist)
+- [**CONTEXTUAL SUMMARY OF PATCH**](#contextual-summary-of-patch)
+
+---
+
+# AsmX-G3 Raptor Engine: Absolute Language Overview
+
+Welcome to the definitive architectural guide to the AsmX-G3 Raptor Engine. We have completely rewritten the core compiler pipeline to elevate AsmX from a rudimentary macro-assembler into a premier, strictly-typed systems programming language. This overview eclipses standard language references by documenting the exact syntactical, semantic, and hardware-level transformations introduced in this patch. 
+
+Every feature below is designed with a single philosophy: **Absolute bare-metal control, encased in unbreakable mathematical safety.**
+
+---
+
+## 1. New Style Lexical Foundations
+**Feature:** Transition to `//` and `/* */` Comment Syntax
+**What changed for the programmer:**
+The legacy assembly-style comments (`;;`) have been completely deprecated. Developers now utilize universally standard C/C++ style line `//` and block `/* */` comments.
+
+**AsmX Example:**
+```cpp
+// Initialize the counter
+int32_t count = 0; 
+/* 
+   Block comments are now fully supported,
+   allowing multi-line documentation.
+*/
+```
+
+**Under the Hood:**
+In `src/backend/targets/x86_64/core.js`, the lexer configuration was updated: `llvm.Config.setCommentLine('//')`. This prevents the parser from attempting to evaluate commented blocks as Abstract Syntax Tree (AST) nodes.
+**Why it's better:** Eliminates cognitive dissonance for developers migrating from C/C++/Rust to AsmX. It unifies the tooling ecosystem and allows standard syntax highlighters to work out-of-the-box.
+**Compatibility Note:** This is a breaking change for old `.asmx` files using `;;`.
+
+---
+
+## 2. Recursive Module Expansion (AST Splicing)
+**Feature:** `@include` and `@import` Directives
+**What changed for the programmer:**
+We have introduced a powerful module resolution system. You can now seamlessly link external standard libraries or local project files without the nightmare of C-style header files.
+
+**AsmX Example:**
+```cpp
+@include "optional.asmx"; // Loads from the global stdlib path
+@import "utils.asmx";     // Loads relative to the current file
+```
+
+**Under the Hood:**
+In `src/parsing/module_expander.cts`, the `ModuleExpander` acts *before* the semantic analyzer. When it detects an `@include` or `@import` instruction, it spawns a fresh `RecursiveDescentParser`, reads the target file, and splices the resulting AST directly into the current compilation unit's tree. Crucially, it utilizes a `loadedFiles: Set<string>` to mathematically guarantee protection against infinite circular dependency loops.
+**Why it's better than C/C++:** C uses `#include`, which blindly pastes raw text, leading to massive compilation times and forcing developers to use `#pragma once` or include guards. AsmX parses the AST *once* and dynamically splices the nodes, dropping compile times dramatically.
+
+```mermaid
+sequenceDiagram
+    participant Main.asmx
+    participant Expander
+    participant Stdlib (optional.asmx)
+    
+    Main.asmx->>Expander: Encounter @include
+    Expander->>Expander: Check loadedFiles Set
+    Expander->>Stdlib: Spawn Lexer & Parser
+    Stdlib-->>Expander: Return raw AST nodes
+    Expander-->>Main.asmx: Splice AST nodes into main tree
+    Note over Expander: Circular imports blocked mathematically
+```
+
+---
+
+## 3. Namespaces and Deep AST Mangling
+**Feature:** `namespace` Isolation and Anonymous Scopes
+**What changed for the programmer:**
+Global symbol pollution is dead. Developers can wrap logic in `namespace { ... }`. We also introduced anonymous namespaces via the `this::` scope accessor.
+
+**AsmX Example:**
+```cpp
+namespace std {
+  fn execute() {}
+}
+
+namespace {
+  // Anonymous namespace
+  fn internal_logic() {}
+}
+
+fn main() {
+  std::execute();
+  this::internal_logic(); // Access anonymous namespace
+}
+```
+
+**Under the Hood:**
+In `src/parsing/semantic_analyzer.cts`, the analyzer maintains a `namespacePath` array. When entering a namespace, it pushes the name (or `$anon` for anonymous ones) onto the stack. Global variables and functions declared inside are automatically mangled (e.g., `std__execute`). We strictly block nesting anonymous namespaces (`if (isAnon && analyzer.hasAnonymousNamespace) throw...`) to prevent unresolvable mangling chains.
+**Why it's better than C/C++:** C has no namespaces, forcing prefixes like `lib_name_func()`. C++ has ADL (Argument-Dependent Lookup) which creates notoriously cryptic linker errors. AsmX uses strict hierarchical path resolution, making symbol lookups deterministic.
+
+---
+
+## 4. Object-Oriented Struct Declarations
+**Feature:** Integrated Data and Member Functions
+**What changed for the programmer:**
+Structures are no longer just memory layouts. `struct` can now encompass data fields, constructors, and member functions.
+
+**AsmX Example:**
+```cpp
+struct Point {
+  int32_t x;
+  int32_t y;
+}
+```
+
+**Under the Hood:**
+In `parser.cts`, the `parse_struct_declaration` method iterates through the struct body. In `semantic_analyzer.cts`, the `StructType` calculates the byte size of each primitive, applying strict 8-byte padding via `alignment - (currentOffset % alignment)`, ensuring flawless memory alignment for the CPU.
+
+---
+
+## 5. Strict Access Modifiers
+**Feature:** Encapsulation via `pub`, `priv`, and `protected`
+**What changed for the programmer:**
+Data hiding is enforced at the compiler level. You define access boundaries inside the `struct`.
+
+**AsmX Example:**
+```cpp
+struct BankCard {
+pub:
+  int32_t id;
+priv:
+  int32_t balance;
+}
+```
+
+**Under the Hood:**
+In `type-checker.cts`, the `checkMemberAccess` function intercepts every `. ` or `->` operator. It checks the `access` flag of the target field/method. If it is `priv`, it verifies that the `currentStruct` context of the caller exactly matches the owner struct. If not, it throws a fatal semantic error.
+**Why it's better than C:** C relies on "opaque pointers" (forward declarations) to hide data, which requires heap allocation. AsmX enforces encapsulation statically, allowing stack-allocated, zero-overhead private data.
+
+---
+
+## 6. The Implicit `this` Pointer
+**Feature:** Automatic State Routing
+**What changed for the programmer:**
+When writing a method inside a struct, you do not need to pass a pointer to the struct itself. `this` is implicitly available.
+
+**AsmX Example:**
+```cpp
+pub fn Point::move(int32_t offset) {
+  this->x += offset; // 'this' is auto-injected
+}
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts` (`[Syntax.Kind.FunctionDeclaration]`), if the function name includes the struct scope (`Point::move`), the compiler synthesizes a `Syntax.Kind.ParameterDeclaration` node of type `Point*` named `this`, and unshifts it into the AST parameters array. At runtime, `this` is passed seamlessly via the `%rdi` register (SysV ABI).
+
+---
+
+## 7. Constructors and Destructors
+**Feature:** Lifecycle Management Keywords
+**What changed for the programmer:**
+You now use `constructor` and `destructor` qualifiers. Constructors explicitly return a typed pointer (`Self` or the struct type).
+
+**AsmX Example:**
+```cpp
+pub constructor Point::__init__(int32_t x) -> Self {
+  this->x = x;
+  return this;
+}
+```
+
+**Under the Hood:**
+The parser `is_decl_qualifier` checks for these keywords. The Semantic Analyzer validates that destructors take exactly zero arguments. For constructors, returning `Self` dynamically resolves to the surrounding `StructType` using the `TypeResolver.normalize_type_with_context` method, preventing hardcoded type-name repetition.
+
+---
+
+## 8. Strictly Sequential Enumerations
+**Feature:** Strongly Typed `enum`
+**What changed for the programmer:**
+You can define enumerated types that map directly to sequential integers, rather than relying on preprocessor macros.
+
+**AsmX Example:**
+```cpp
+enum Color { RED, GREEN, BLUE }
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts`, the `EnumType` class is instantiated. It iterates over the AST identifiers (`RED`, `GREEN`, etc.) and assigns an ascending `currentValue++`. Unlike C, these are not global integers; they are strictly bound to the `Color` QualType, preventing accidental addition (e.g., `RED + 5` throws a type error).
+
+---
+
+## 9. Hardware-Safe Tagged Unions
+**Feature:** Memory-Protected ADTs (Algebraic Data Types)
+**What changed for the programmer:**
+Traditional unions blindly overwrite memory. AsmX unions securely wrap payloads with a hidden validation tag.
+
+**AsmX Example:**
+```cpp
+union Shape {
+  Circle(int32_t),
+  Rectangle(int32_t, int32_t)
+}
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts` (`[Syntax.Kind.UnionDeclaration]`), the compiler computes the maximum byte width across all variants (e.g., `Rectangle` = 8 bytes). It then prepends a 4-byte internal integer `tag`. The overall structure size is then aligned to an 8-byte boundary. Memory corruption is physically impossible.
+**Why it's better than C/C++:** C unions are the leading cause of "Type Confusion" zero-day exploits. C++ `std::variant` is heavily templated and slow to compile. AsmX implements this at the absolute lowest hardware level, offering Rust-tier safety at assembly-tier speeds.
+
+```mermaid
+block-beta
+  columns 1
+  UnionSpace["Memory Layout of AsmX Tagged Union (Shape)"]
+  block:Group
+    columns 2
+    Tag["+0x00: Tag (int32_t)"] Padding["+0x04: Alignment Padding"]
+    Payload["+0x08: Max Payload Area (Rectangle = 8 bytes)"] Empty["(Shared Memory Space)"]
+  end
+```
+
+---
+
+## 10. Pattern Matching (`inspect`)
+**Feature:** Safe Union Payload Extraction
+**What changed for the programmer:**
+To read a Tagged Union, you use the `inspect` syntax, which binds the underlying memory safely to local variables.
+
+**AsmX Example:**
+```cpp
+inspect (shape) {
+  std::Shape::Rectangle(w, h) => {
+    // w and h are extracted
+  }
+  _ => { } // Default case
+}
+```
+
+**Under the Hood:**
+In `driver.cts` (`[Syntax.Kind.InspectStatement]`), the driver reads the 4-byte tag from memory (`mov eax, [r10]`). It emits a jump table: `cmp eax, VARIANT_TAG` followed by `jne NEXT_CASE`. If the tag matches, it reads the payload via calculated offsets (`[r10 + 4]`, `[r10 + 8]`) into registers, and binds them to the AST's `Environment` scope so the user's block code can access `w` and `h` seamlessly.
+
+---
+
+## 11. On-The-Fly Monomorphization (Generics)
+**Feature:** `template<typename T>`
+**What changed for the programmer:**
+You can write type-agnostic code with zero runtime performance penalty.
+
+**AsmX Example:**
+```cpp
+template<typename T>
+struct Wrapper { T value; }
+
+Wrapper<int32_t> int_wrap;
+```
+
+**Under the Hood:**
+When the parser hits `<typename T>`, it creates a `Generics` node. In `semantic_analyzer.cts`, the template is saved to `templateRegistry` and execution halts. When `Wrapper<int32_t>` is encountered, the `TypeTable` triggers `onTemplateInstantiate`. The compiler deep-clones the AST, replaces `T` with `int32_t`, generates a unique name `Wrapper__7int32_t`, and feeds the new AST back into the analyzer.
+**Why it's better than C/Java:** C has no templates (only unsafe `void*`). Java uses Type Erasure (slow, requires boxing). AsmX uses Monomorphization, generating perfectly optimized, dedicated machine code for every type permutation.
+
+---
+
+## 12. Function Overloading and Mangling
+**Feature:** Polymorphic Signatures
+**What changed for the programmer:**
+You can now define multiple functions with the exact same name, provided their parameter types differ.
+
+**AsmX Example:**
+```cpp
+fn use_overload(bool x) { /* ... */ }
+fn use_overload(int32_t x) { /* ... */ }
+
+use_overload(true); // Automatically routes to the bool variant
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts` (`[Syntax.Kind.FunctionDeclaration]`), the compiler computes a `unique_mangled_name` by concatenating the base name with the sanitized names of all parameter types (e.g., `use_overload__4bool` and `use_overload__7int32_t`). When a `Call` node is processed, the `TypeChecker` evaluates the `OverloadSetType`. It first attempts an exact signature match; if that fails, it simulates implicit casting (`check_initialization`) to find the most viable candidate.
+**Why it's better than C:** C strictly forbids function overloading, forcing developers into horrific naming conventions like `print_int`, `print_bool`, `print_string`. AsmX automates this entirely, keeping the frontend syntax pristine while maintaining strict binary-level linking.
+
+---
+
+## 13. Guaranteed Return Value Optimization (RVO)
+**Feature:** Zero-Copy Object Instantiation
+**What changed for the programmer:**
+When you initialize a structure and immediately return it, the compiler skips creating a temporary stack object.
+
+**AsmX Example:**
+```cpp
+fn make_point() -> Point {
+  return Point { 10, 20 }; // Constructed directly in the caller's memory!
+}
+```
+
+**Under the Hood:**
+In `driver.cts` (`compile_variable_decl_local` and the assignment evaluators), when the compiler sees an initializer list `{...}` mapped to an `_constructorCall` annotation, it alters the hardware emission. Instead of doing `sub rsp, size` to create a temporary object, evaluating the constructor, and then performing a `rep movsb` to copy it to the return slot, the compiler simply loads the address of the final destination into `%rax` and pushes it as the `this` pointer for the constructor. 
+**Why it's better than C++17:** While C++17 introduced "guaranteed copy elision", C++ compilers rely on highly complex optimizer passes (LLVM IR/GIMPLE) to achieve it. AsmX guarantees RVO natively at the AST-to-Machine-Code boundary. It is an intrinsic property of the language's hardware mapping, not an optimizer afterthought.
+
+```mermaid
+sequenceDiagram
+    participant AST Evaluator
+    participant Hardware Emitter
+    participant Constructor
+    
+    AST Evaluator->>AST Evaluator: Detect { ... } inside return/assignment
+    AST Evaluator->>Hardware Emitter: Suppress temporary stack allocation
+    Hardware Emitter->>Constructor: Pass final memory destination as 'this'
+    Note over Constructor: Object built directly in final location
+```
+
+---
+
+## 14. SRET (Hidden Return Pointer ABI)
+**Feature:** Safe Large-Struct Returns
+**What changed for the programmer:**
+Returning structures larger than 16 bytes is seamlessly supported without blowing up CPU registers.
+
+**AsmX Example:**
+```cpp
+// BankCard is 24+ bytes.
+fn create_card() -> BankCard {
+  BankCard card;
+  return card;
+}
+```
+
+**Under the Hood:**
+The System V ABI dictates that objects > 16 bytes cannot be returned in `%rax` and `%rdx`. In `semantic_analyzer.cts`, the compiler intercepts function declarations returning large structures and silently unshifts a `void* __hidden_ret_ptr` parameter into the AST. In `driver.cts` (`compile_hl_call_statement`), the caller allocates `sub rsp, SIZE` and passes the address to `%rdi`. Upon `return`, the callee issues a hardware `rep movsb` to copy the local structure into the hidden pointer's address.
+
+---
+
+## 15, 16, 17. Complete Control Flow (`if`, `while`, `return`)
+**Feature:** Standard Structured Programming
+**What changed for the programmer:**
+Full branching and looping mechanics have replaced manual assembly jump labels.
+
+**AsmX Example:**
+```cpp
+while (true) {
+  if (condition) {
+    return 0;
+  }
+}
+```
+
+**Under the Hood:**
+- **Parsing:** `parser.cts` intercepts these keywords and constructs `IfStatement`, `WhileStatement`, and `ReturnStatement` nodes.
+- **Execution (`driver.cts`):**
+  - **If/While:** The condition is compiled into `%rax`. The driver emits `cmp rax, 0` followed by `je` (Jump if Equal) to skip the block. The compiler tracks byte offsets dynamically and back-patches the relative 32-bit jump distances (`buf.writeInt32LE`) after the block is fully compiled.
+  - **Return:** Handles the epilogue. If a value is provided, it is evaluated into `%rax`. It then emits the strict SysV epilogue: `mov rsp, rbp; pop rbp; ret`.
+
+---
+
+## 18. Labeled Jumps (`break`, `continue`)
+**Feature:** Deterministic Loop Escapes
+**What changed for the programmer:**
+You can target specific outer loops for breakout, avoiding the "spaghetti code" associated with `goto`.
+
+**AsmX Example:**
+```cpp
+goat: while (true) {
+  while (inner) {
+    break goat; // Instantly escapes the outer loop
+  }
+}
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts`, when a `LabelStatement` (`goat:`) is encountered, it pushes the label onto a `loopStack`. If a `break` or `continue` is used, the semantic analyzer verifies the label exists on the stack. In `driver.cts`, these emit a dummy `jmp` instruction and return a `JumpPatch` object. The outer `while` loop aggregator catches these patches, matches the label, and manually writes the correct physical byte offset into the binary, executing a hardware-perfect jump.
+**Why it's better than C:** C provides `goto`, which allows developers to jump anywhere, frequently bypassing variable initializations and destroying stack integrity. AsmX's labeled breaks provide the multi-level escape power of `goto`, but restrict it entirely to verified loop boundaries.
+
+---
+
+## 19. Magic `sizeof` Interception
+**Feature:** Zero-Cost Compile-Time Introspection
+**What changed for the programmer:**
+You can query the exact byte width of any type or expression at compile-time.
+
+**AsmX Example:**
+```cpp
+int32_t array_size = sizeof(std::pair<int32_t, int32_t>); // Evaluates to 8
+```
+
+**Under the Hood:**
+In `semantic_analyzer.cts` (`[Syntax.Kind.Call]`), the compiler intercepts calls to the identifier `sizeof`. It resolves the `QualType` of the argument, invokes `size()` on the type class, and completely overwrites the AST node in-place. The `Call` node is destroyed and replaced with a `Literal` `NumberLiteral` containing the integer size. The hardware driver never sees a function call, emitting a blazing-fast `@mov reg, IMM`.
+
+---
+
+## 20. Subscript Indexing and Pointer Arithmetic
+**Feature:** Safe Array Access
+**What changed for the programmer:**
+You can access array offsets dynamically and retrieve memory addresses of elements.
+
+**AsmX Example:**
+```cpp
+const char* str = "hello";
+char c = str[2]; // Gets 'l'
+const char* ptr = &str[2]; // Gets address of 'l'
+```
+
+**Under the Hood:**
+In `operand-parser.cts`, `str[2]` is parsed as a `subscript` type. In `driver.cts` (`compile_subscript_address`), the compiler protects registers by pushing the base address (`str`) to the stack (`push r10`), evaluating the index (`2`) into `%rcx`, and popping `%r10`. It then constructs a Scaled Index Byte (SIB) instruction based on the element size (e.g., scale = 1 for `char`): `lea reg, [r10 + rcx * 1]`. For the `&` operator, it simply retains this address; for value access, it issues a `mov` to dereference it.
+
+```mermaid
+graph TD
+    A["Subscript: arr[idx]"] --> B{Address or Value?}
+    B -->|Address '&'| C["Evaluate Base -> r10"]
+    B -->|Value| C
+    C --> D["Push r10 to secure base"]
+    D --> E["Evaluate Index -> rcx"]
+    E --> F["Pop r10"]
+    F --> G["Emit SIB: r10 + rcx * sizeof(T)"]
+    G --> H{Address or Value?}
+    H -->|Address| I["lea dest, SIB"]
+    H -->|Value| J["mov dest, SIB"]
+```
+
+---
+
+## 21. Expanded Instruction Set Architecture (ISA)
+**Feature:** Full Mathematical and Extension Support
+**What changed for the programmer:**
+The underlying assembly engine now supports a massive suite of x86-64 instructions natively: `movsx` (Move Sign-Extend), `movzx` (Move Zero-Extend), `pop`, `mul`, `imul`, `div`, `idiv`, and `neg`.
+
+**AsmX Example (Implicit):**
+```cpp
+int16_t small = -5;
+int32_t large = small; // Emits 'movsx' automatically
+```
+
+**Under the Hood:**
+In `src/backend/targets/x86_64/hwm/tbl.cts`, the instruction lookup tables were massively expanded. 
+- `movsx/movzx` were configured to read from `ModRM_RM` sizes of Byte/Word and write to Dword/Qword, which is vital for safely converting `char` and `bool` to `int32_t`. 
+- Arithmetic ops like `imul` were granted 3-operand signatures (`imul reg, reg/mem, imm`) to support rapid array scaling logic inside the compiler backend. 
+- The driver (`compile_expr_to_reg`) intelligently queries the `isSigned` status of variables to choose between `movzx` (unsigned) and `movsx` (signed).
+
+---
+
+## 22. Advanced Memory Operands (SIB Syntax)
+**Feature:** Raw Hardware Memory Scaling
+**What changed for the programmer:**
+For developers needing raw low-level control, the instruction syntax now fully supports complex hardware addressing tuples.
+
+**AsmX Example:**
+```cpp
+@mov (%rax, %r15, 2), %rdx; // [base + index * scale + displacement]
+```
+
+**Under the Hood:**
+In `operand-parser.cts`, when the parser encounters a `Tuple` (List) inside an instruction operand, it extracts it as a `memory_sib` type. It validates the base register (`%rax`), the index register (`%r15`), and strictly verifies that the scale factor is a valid hardware multiplier (`1`, `2`, `4`, or `8`). The `HardwareMachineFactoryParserOpernadType` then encodes this directly into the binary ModR/M and SIB bytes, giving developers naked access to CPU addressing modes.
+
+---
+
+# Checklist of found language changes (Completeness Checklist)
+
+1.  **C-Style Comments** (`core.js`) — Deprecated `;;` in favor of `//` and `/* */` for ecosystem compatibility.
+2.  **Module Expander** (`module_expander.cts`) — True AST splicing for `@include` and `@import`, bypassing C-style preprocessor text inclusion.
+3.  **Namespaces** (`parser.cts`, `semantic_analyzer.cts`) — Hierarchical scope isolation, deep symbol mangling, and `this::` anonymous scopes.
+4.  **Struct Declarations** (`parser.cts`) — Integrated data and methods within a single `struct` block.
+5.  **Access Modifiers** (`type-checker.cts`) — Strict encapsulation via `pub`, `priv`, and `protected` verified via `checkMemberAccess`.
+6.  **Implicit `this` Pointer** (`semantic_analyzer.cts`) — Auto-injected parameter for methods, evaluated dynamically during member access.
+7.  **Constructors & Destructors** (`parser.cts`) — Semantic lifecycle hooks returning strongly-typed `Self` pointers.
+8.  **Enumerations** (`semantic_analyzer.cts`) — Sequential integer mappings tied to strict `EnumType` boundaries.
+9.  **Tagged Unions** (`semantic_analyzer.cts`) — Secure memory payloads with an automated 4-byte validation tag.
+10. **Pattern Matching (`inspect`)** (`driver.cts`) — Tag evaluation jump tables that safely bind payloads to local variables via `=>`.
+11. **Templates (Generics)** (`semantic_analyzer.cts`) — `<typename T>` syntax with deep AST cloning and zero-cost on-the-fly monomorphization.
+12. **Function Overloading** (`type-checker.cts`) — `unique_mangled_name` generation allowing multiple functions with identical names but differing signatures.
+13. **Return Value Optimization (RVO)** (`driver.cts`) — In-place object initialization bypassing temporary stack allocations.
+14. **SRET (Hidden Return Pointer)** (`semantic_analyzer.cts`) — SysV ABI compliance for >16-byte structs using auto-injected `__hidden_ret_ptr`.
+15. **Control Flow (`if`/`else`)** (`parser.cts`) — Standard conditional branching mapped to relative byte-offset hardware jumps.
+16. **Control Flow (`return`)** (`parser.cts`) — Expression evaluation paired with strict `mov rsp, rbp; pop rbp; ret` epilogue emission.
+17. **Control Flow (`while`)** (`parser.cts`) — Loop tracking with dynamic jump offsets.
+18. **Labeled Jumps** (`driver.cts`) — Multi-level loop escapes (`goat:`, `break goat;`) verified via compile-time `loopStack` analysis.
+19. **Magic `sizeof`** (`semantic_analyzer.cts`) — Zero-cost AST interception replacing function calls with compile-time constants.
+20. **Subscript Indexing** (`operand-parser.cts`) — `arr[x]` array indexing evaluating into protected SIB memory instructions.
+21. **New Hardware Instructions** (`tbl.cts`) — Full backend support for `movsx`, `movzx`, `pop`, `mul`, `imul`, `div`, `idiv`, `neg`.
+22. **Advanced Memory Operands** (`operand-parser.cts`) — Raw SIB hardware addressing `(%base, %index, scale)` exposed directly to the high-level syntax.
+
+# **CONTEXTUAL SUMMARY OF PATCH**
+This monumental patch represents a complete architectural paradigm shift for the compiler and assembler toolchain. The codebase transitions from supporting a primitive, linear assembly-like syntax to supporting a fully-featured, high-level, object-oriented. 
+
+The core compilation pipeline has been entirely rewritten to utilize a two-pass code generation strategy, ensuring accurate stack frame allocation and strict adherence to the System V Application Binary Interface (ABI) for function calls and system integration. 
+
+New capabilities introduced across the Abstract Syntax Tree (AST), lexical scanner, semantic analyzer, and hardware machine generator include: user-defined structures (structs), tagged unions, enumerations, template instantiation, recursive module expansion (import/include), namespaces, comprehensive control flow (if, while, break, continue), pattern matching via an inspect statement, function overloading, and advanced memory management handling including Return Value Optimization (RVO) and hardware-level memory copying for large data structures.
+
+**ARCHITECTURAL OVERVIEW: THE NEW SYSTEMS PROGRAMMING PARADIGM**
+
+Before resuming the exhaustive file-by-file documentation protocol, it is mandatory to address the monumental paradigm shift this patch introduces. The language has evolved from a primitive instruction wrapper into a fully-fledged, systems-level programming language capable of competing with C and C++, while introducing modern memory safety and expressiveness paradigms. 
+
+Here is a deep-dive into the architectural capabilities introduced in this patch:
+
+**1. CRT-Less Linux Execution (Zero-Overhead Entry)**
+In standard C/C++, the `main` function is not the actual entry point. The kernel invokes `_start` provided by the C Runtime (CRT, usually `libc`), which parses the stack, sets up the environment, and *then* calls `main(argc, argv, envp)`. 
+This compiler bypasses the C Runtime entirely. The new `main(int32_t args_count, char** args, char** env)` is the *literal* executable entry point. The compiler driver has been programmed to understand the raw Linux kernel process initialization stack layout. When the process starts, the kernel leaves `argc` at `[rsp]`, and `argv` immediately following. The compiler generates a highly specialized prologue (`compile_main_entry_param_spills`) that intercepts these raw stack values, calculates the `envp` pointer using Scaled Index Byte (SIB) arithmetic (`lea rax, [rbp + rcx*8 + 24]`), and safely routes them into strongly-typed local variables. This results in incredibly fast, ultra-minimalist binaries with zero external dependencies.
+
+**2. Return Value Optimization (RVO) and SRET (Hidden Return Pointer)**
+The language now features absolute compliance with the System V Application Binary Interface (SysV ABI) for complex types, implementing true Return Value Optimization. 
+In primitive languages, returning a structure copies all its bytes into registers (which fail if the struct is large) or blindly pushes them to the stack. This patch introduces intelligent sizing:
+*   **Primitives (≤8 bytes):** Returned directly in the `%rax` register.
+*   **Medium Structs (9–16 bytes):** Returned split across `%rax` and `%rdx` registers (e.g., `std::optional` or `std::pair`).
+*   **Large Structs (>16 bytes):** The compiler implements the **SRET (Struct Return)** protocol. The *caller* allocates uninitialized space on its own stack frame, and passes the memory address of this space as a "hidden pointer" (in `%rdi` or `%rax` depending on parameter count) to the *callee*. The callee (the constructor or function) builds the object *directly* into the caller's memory. This completely eliminates redundant memory copying and prevents stack-smashing vulnerabilities.
+
+**3. Generics and Monomorphization (C++-Style Templates)**
+The patch introduces a true template engine (`template<typename T>`). Unlike Java or TypeScript, which use Type Erasure (treating everything as a generic object at runtime), this compiler uses **Monomorphization**. When you write `env_ns::print_number<int32_t>(65355)`, the semantic analyzer halts, deeply clones the Abstract Syntax Tree of `print_number`, physically replaces every instance of `T` with `int32_t`, generates a uniquely mangled name (e.g., `print_number__7int32_t`), and registers it as a brand-new function. This guarantees zero runtime overhead and allows strict hardware-level type sizing (e.g., knowing exactly whether to use `%al`, `%eax`, or `%rax`).
+
+**4. Tagged Unions and Pattern Matching (`inspect`)**
+Raw `union` types in C are notoriously unsafe, as the compiler cannot prevent you from writing an integer and reading it back as a pointer, leading to catastrophic memory corruption. 
+This language introduces **Tagged Unions** (like Rust's `enum` or Swift's discriminated unions). When you declare `union Shape { Circle(int32_t), Rectangle(int32_t, int32_t) }`, the compiler automatically reserves a hidden 4-byte integer "tag" at the top of the memory layout. 
+To safely access the data, the language introduces the `inspect` statement. The compiler emits machine code that reads the hidden tag, evaluates a jump table (`cmp eax, TAG; jne NEXT_CASE`), and automatically binds the memory payload to safely scoped local variables (e.g., `Square(w) => { ... }`). It is impossible to access the memory incorrectly, providing unparalleled memory safety without sacrificing hardware proximity.
+
+**5. Object-Oriented Structures with Strict Encapsulation**
+The language now supports `struct` definitions with internal methods, constructors, and access modifiers (`pub`, `priv`). Under the hood, the compiler transforms methods into standard functions, automatically injecting a strongly-typed `this` pointer as the first parameter. It performs offset arithmetic at compile-time, converting `this->x` into `lea rax, [rbp - offset]`. The semantic analyzer strictly enforces access control, throwing compilation errors if a `priv` field is accessed outside its owner's scope, promoting safe systems architecture.
+
+---
+
+### FILE: `README.md`
+- **Lines 92-98:** Modified the documentation for compiling the test library. The execution command was changed to reflect the new directory structure, moving the target from `./examples/test_main` to `./examples/g4/test_main`. The C source file input was updated to `./examples/g4/libm_test.c`. Crucially, the dynamically linked library flag was updated from `-lasmm` to `-lasmm-v2`, indicating a major version bump in the underlying generated library format resulting from the compiler changes.
+
+### FILE: `examples/g4/compile.asmx`
+- **Lines 1-4:** Replaced legacy assembler-style comments (`;;`) with C-style double-slash comments (`//`).
+- **Lines 4-8:** Introduced the new module expansion syntax. Added `@include "pair.asmx"`, `@include "optional.asmx"`, and `@import "module.asmx"`. This demonstrates the invocation of the new `ModuleExpander` to recursively resolve and merge external Abstract Syntax Trees into the current compilation unit.
+- **Lines 14-15:** Appended a new string constant `newline` mapped to `"\n"` within the `@section rodata` block to facilitate standardized console output testing.
+- **Lines 41-45:** Completely refactored the `syscall_write` function. Previously, it manually assigned values to hardware registers. Now, it accepts strictly typed parameters (`int32_t fd`, `const char* buf`, `int32_t count`) and utilizes the `@mov` instruction to transfer these named local variables into the System V Application Binary Interface registers (`%rdi`, `%rsi`, `%rdx`). This tests the new local stack frame resolution logic.
+- **Lines 47-111:** The legacy `main` function, which relied heavily on manual register manipulation and raw `@syscall` opcodes, was extensively commented out to make way for high-level language tests.
+- **Lines 113-122:** Implemented a new `strlen` function using the newly introduced `while` loop construct and array subscript indexing (`str[len]`), testing pointer arithmetic and conditional branching.
+- **Lines 123-134:** Defined a `car` structure containing a string pointer `make` and an integer `year`, along with a global instantiation `my_car_global`.
+- **Lines 144-199:** Defined a highly complex `Point` structure. This tests public (`pub`) and private (`priv`) access modifiers, member variables, and constructor (`__init__`) definitions. Implemented multiple member methods (`get_register_id`, `set_register_id`, `method_name`, `set_name`, `print_name`, `call_another_method`, `use_self`). This section rigorously validates the generation and passing of the implicit `this` pointer, structure member memory offsets, and nested method invocations.
+- **Lines 202-232:** Introduced a `std` namespace encapsulating a `vector` template, a `Shape` tagged union, and a `Color` enumeration. This tests namespace mangling, template type registration, and tagged union memory alignment.
+- **Lines 234-245:** Added function overloading tests. Implemented `use_overload(bool)` and `use_overload(int32_t)`. This validates the semantic analyzer's ability to mangle names based on parameter types and resolve the correct function pointer during a call.
+- **Lines 251-280:** Implemented a mathematical `factorial` function. This function uses a labeled `while` loop (`goat:`) and explicit `continue goat;` and `break goat;` jump statements. This validates the compiler's new label-tracking stack and loop-unrolling instruction pointer patching.
+- **Lines 288-323:** Implemented an `itoa` (integer to ASCII) function. This tests boolean evaluation, negative number handling, modulo arithmetic (`%`), implicit type casting, and postfix increment operators (`i++`) within array subscripts.
+- **Lines 325-341:** Tested template instantiation by creating a `print_number<T>` function inside an `env_ns` namespace, validating the compiler's ability to duplicate Abstract Syntax Tree nodes on-the-fly and replace generic tokens with concrete types.
+- **Lines 359-548:** Replaced the legacy `main` with a standard C-style `main(int32_t args_count, char** args, char** env)` entry point. This heavily tests the compiler's Linux environment initialization capabilities (extracting `argc`, `argv`, and `envp` directly from the stack pointer upon process execution). 
+- **Lines 391-419:** Added instantiation logic for the imported `std::optional` and `std::pair` templates. This tests the Return Value Optimization (RVO) mechanics, ensuring that structs larger than 8 bytes are allocated on the caller's stack frame and populated by the callee using a hidden return pointer.
+- **Lines 473-490:** Implemented an `inspect` statement (pattern matching) against the `std::Shape` union. This tests the compiler's ability to extract the 4-byte union tag, perform a jump-table evaluation, and safely extract the payload memory into local bindings (`w`, `h`).
+
+### FILE: `examples/g4/libm.asmx`
+- **Lines 1-8:** Updated comment syntax from `;;` to `//` for consistency with the new parser rules.
+- **Lines 27-29:** Refactored the `lc_print` shared function. Replaced the direct assembly call `@call _local;` with a high-level function invocation `_local();`, allowing the compiler to handle Application Binary Interface conventions automatically.
+
+### FILE: `examples/g4/simple_driver.asmx`
+- **Lines 1-20:** Updated comment syntax from `;;` to `//`. Commented out the `fw_probe` function to simplify the kernel module initialization test.
+
+### FILE: `package.json` & `src/package.json`
+- **Line 18:** Updated the `@types/node` development dependency from version `^22.10.10` to `^22.19.17`. This ensures the TypeScript compiler leverages the most recent Node.js environment type definitions during the build process, preventing potential missing-type errors for newer file system APIs.
+
+### FILE: `src/backend/targets/x86_64/assembly/assembly_main.js` & `src/backend/targets/x86_64/assembly/assembly_main.ts`
+- **Lines 29-35 (JS) / 44-50 (TS):** Modified `impl_assembly_fn_base.gen_allocate_local_variables()`. Previously, it calculated the required stack frame size by iterating and summing the sizes of elements in the `this.fn_locals` array. The logic was updated to check if `this.fn_locals_size > 0`. If true, it utilizes this pre-computed value provided by the new two-pass code generation system (which accounts for memory alignment and padding). If false, it falls back to the legacy array summation.
+- **Lines 55-61 (JS) / 73-79 (TS):** Applied the exact same conditional logic to `impl_assembly_fn_base.gen_free_local_variables()` to ensure the stack pointer (`%rsp`) is correctly restored by the exact amount it was decremented during the prologue.
+- **Lines 111-125 (JS) / 132-146 (TS):** Commented out the entire `impl()` execution method within the `impl_assembly_fn_main` class. Previously, this method forcefully appended `this.gen_exit_syscall()` to the end of the `main` function to terminate the Linux process. This was removed because the new parser expects the user's high-level source code to emit its own program exit instruction (e.g., returning 0, or manually calling exit). Retaining this automatic append caused double `@syscall` opcodes in the output binary, leading to undefined behavior.
+
+### FILE: `src/backend/targets/x86_64/core.js`
+- **Line 13:** Added an import for `HardwareMachineFactoryExceptionJournal` from `./hwm/main.cjs` to manage robust hardware-level error reporting.
+- **Line 52:** Changed `llvm.Config.setCommentLine(';;')` to `llvm.Config.setCommentLine('//')`, aligning the lexer with C-style languages.
+- **Line 55:** Registered a new token definition `PATTERN_CASE` bound to the lexem `=>`. This is required to parse the arrow syntax inside the new `inspect` pattern matching blocks.
+- **Lines 132-138:** Intercepted the Abstract Syntax Tree (AST) output from the `RecursiveDescentParser`. Instantiated the newly created `ModuleExpander` class and executed `expander.expand(tree, mainFilePath)`. This deeply traverses the tree, detects `@include` and `@import` instructions, recursively parses those external files, and splices their AST nodes directly into the main tree before semantic analysis begins.
+- **Line 163:** Added `HardwareMachineFactoryExceptionJournal.throw_stacktrace()` immediately after the compiler driver finishes execution. This ensures that any non-fatal hardware compilation errors suppressed during the instruction parsing phase are flushed and printed to the standard output.
+
+### FILE: `src/backend/targets/x86_64/hwc/linker-strategy.cjs` & `src/backend/targets/x86_64/hwc/linker-strategy.cts`
+- **Lines 702-716 (CJS) / 862-876 (CTS):** Added, but subsequently commented out, a fallback strategy for `PC32` (Program Counter 32-bit) relocations. The commented block attempted to intercept failures where an external symbol lacking a specific section name was called via a `PC32` relocation. The fallback attempted to look up the Procedure Linkage Table (PLT) offset for the symbol and manually calculate a `PLT32` relative jump instead. By keeping this commented out and retaining the strict `throw new Error` path, the compiler enforces strict relocation typing, forcing the driver to explicitly request `R_X86_64_PLT32` for external calls.
+
+### FILE: `src/backend/targets/x86_64/hwm/main.cjs` & `src/backend/targets/x86_64/hwm/main.cts`
+- **Lines 16-23 (CJS) / 29-36 (CTS):** Updated the `ConstRegisterFile` definitions for the x86-64 extended registers (`r8`, `r9`, `r10`, `r11`, `r12`, `r13`, `r14`, `r15`). Appended the `isExtended: true` boolean property to each descriptor. This property is critical for the instruction encoder to properly emit the REX (Register Extension) prefix byte during binary translation.
+- **Lines 134-153 (CJS) / 158-175 (CTS):** Expanded the `HardwareMachineFactoryExceptionJournal` class with two new static methods: `throw_runtime(message: string)` for immediate console logging, and `throw_stacktrace()`. The `throw_stacktrace` method aggregates all suppressed errors in the `journal` array, groups identical messages, appends a multiplier string (e.g., `(x5)`), and outputs them. This prevents terminal flooding when a single syntax error cascades into hundreds of identical instruction failures.
+- **Lines 558-561 (CJS) / 619-622 (CTS):** Implemented a new public method `hasInstruction(instruction: string): boolean` in the `HardwareMachineFactory`. This allows the high-level compiler driver to safely query if an arithmetic operator (like `+=`) maps to a valid hardware mnemonic (like `add`) before attempting compilation.
+- **Lines 832-840 (CJS) / 914-922 (CTS):** Refactored the `HardwareMachineFactory.compile()` method. Previously, passing an invalid mnemonic or operand set would `throw new Error`, crashing the entire Node.js process immediately. Now, the method catches the failure, pushes the string to `HardwareMachineFactoryExceptionJournal.throw`, and returns an object `{ ok: false, error: string }`. This allows the semantic analyzer to attach accurate file line numbers to the error before displaying it to the user.
+- **Line 1001 (CJS) / 1110 (CTS):** Updated the successful termination path of `compile()` to explicitly return `{ ok: true, error: "" }`.
+
+### FILE: `src/backend/targets/x86_64/hwm/tbl.cjs` & `src/backend/targets/x86_64/hwm/tbl.cts`
+*This file manages the hardware instruction encoding lookup tables.*
+- **Lines 373-390 (CJS) / 387-405 (CTS):** Modified the `movsxd` (Move with Sign-Extension Doubleword to Quadword) instruction definition. Changed the `operationSizeMode` from `ExplicitDword` and `ExplicitQword` to `FromFirstRegMem`. Added `requiresMatchingRegMemSizes: true` for the 32-bit variant, and `requiresRexW: true` combined with `requiresMatchingRegMemSizes: false` for the 64-bit variant. This corrects an encoding bug where sign-extending 32-bit memory into a 64-bit register generated an invalid operand size prefix.
+- **Lines 393-445 (CJS) / 408-460 (CTS):** Added full instruction definitions for `movsx` (Move with Sign-Extension) and `movzx` (Move with Zero-Extension). Configured variants for extracting 8-bit (`ModRM_RM` size Byte) and 16-bit (`ModRM_RM` size Word) memory/registers into 16/32/64-bit destination registers. This is required for correctly loading `char` and `bool` variables from the stack into standard CPU registers.
+- **Lines 506-545 (CJS) / 521-560 (CTS):** Expanded the `pop` instruction definition. Added the `8F /0` variant to support popping data directly into memory addresses (`ModRM_RM`). Added specific implicit encoding variants for `pop fs` (`0F A1`) and `pop gs` (`0F A9`) with `disallowsRex: true` configurations.
+- **Lines 608-875 (CJS) / 629-896 (CTS):** Added comprehensive instruction definitions for the core mathematical operations: `neg`, `mul`, `imul`, `div`, and `idiv`. Each instruction received four base variants (Byte, Word, Dword, Qword) utilizing the `ModRM_RM` extension fields (e.g., `neg` uses extension `3`, `mul` uses `4`, `imul` uses `5`, `div` uses `6`, `idiv` uses `7`). Additionally, `imul` received advanced two-operand (`0F AF`) and three-operand immediate (`6B`, `69`) variants to support fast integer multiplication and array scaling logic.
+
+### FILE: `src/backend/targets/x86_64/print.cjs` & `src/backend/targets/x86_64/print.cts`
+*This file manages the visual dumping of the Abstract Syntax Tree to the console.*
+- **Lines 143-156 (CJS) / 144-154 (CTS):** Removed the formatting logic for `Syntax.Kind.Application`. The `Application` node type has been entirely phased out of the AST in favor of the more robust `Call` node type, rendering this code dead.
+- **Lines 274-280 (CJS) / 288-293 (CTS):** Added logic to the `_collectChildren` walker. If it encounters a generic `StructToken` of type `IDENTIFIER` stored as a raw value inside a node, it wraps it in an ephemeral `Syntax.RegistryMap[Syntax.Kind.Identifier]` node so the visualizer can print it uniformly without crashing.
+- **Lines 317-327 (CJS) / 340-348 (CTS):** Removed the `Syntax.Kind.Application` child extraction logic. Added extraction logic for the new `generics` property inside `Syntax.Kind.Identifier` nodes, allowing template arguments (e.g., `<int32_t>`) to appear in the tree output.
+- **Lines 362-366 (CJS) / 380-394 (CTS):** Updated `Syntax.Kind.VariableDeclaration` to extract and print the new `arrayDimensions` property.
+- **Lines 385-389 (CJS) / 417-421 (CTS):** Updated `Syntax.Kind.FunctionDeclaration` to extract and print the new `templateParams` property.
+
+
+### FILE: `src/backend/targets/x86_64/raptor/driver.cjs` & `src/backend/targets/x86_64/raptor/driver.cts`
+*This is the core compilation engine that translates the AST into hardware instructions. The entire file has been overhauled for the two-pass generation architecture.*
+
+- **Type Definitions (`LocalVarInfo`, `LocalVarFrame`, `JumpPatch`):** Added robust TypeScript interfaces to manage the new stack frame logic. `LocalVarInfo` tracks the exact negative byte offset relative to the Base Pointer (`%rbp`) for local variables and parameters.
+- **Class Properties:** Introduced `string_literal_counter` to generate unique `.rodata` labels (e.g., `.Lstr.0`), and `loopStack` / `loopLabels` to manage nested `while` loops and properly route `break` and `continue` jump offsets.
+- **Lines 85-106 (CJS) / 123-140 (CTS) `pre_register_functions`:** Implemented a recursive pre-pass function. Before any code is generated, this scans the entire Abstract Syntax Tree (including inside namespaces) and registers function names into `this.fnMap` with an `isForwardDeclared: true` flag. This allows functions to call other functions defined further down in the file, eliminating the need for C-style header definitions.
+- **Lines 151-262 (CJS) / 208-323 (CTS) `operand_to_hwm`:** Radically updated operand routing. 
+  - If the operand is a `variable_address` or `variable_value`, the compiler now checks the `frame` (the local stack layout). If it exists in the frame, it emits Base Pointer relative addressing (e.g., `[rbp - 8]`). If it does not exist, it assumes it is a global variable and generates Instruction Pointer relative addressing (`[rip + 0]`) and appends a `R_X86_64_PC32` relocation record to be resolved by the linker.
+  - Added support for `memory_sib` (Scaled Index Byte) to support complex array arithmetic like `(%rax, %rcx, 8)`.
+- **Lines 265-316 (CJS) / 340-399 (CTS) `compile_generic_instruction`:** Modified to accept the new `frame` parameter. It now initializes a separate `prefixBuffer`. If an operand is a deeply nested array subscript (e.g., `arr[x]`), it compiles the address calculation into the `prefixBuffer` (saving it to `%r11`), and then evaluates the main instruction using `%r11` as the memory base. This prevents register clobbering during complex instruction evaluation.
+- **Lines 396-455 (CJS) / 518-577 (CTS) `serialize_const_value`:** Upgraded to support dynamic typing. Instead of assuming 8-byte integers, it reads the `QualType` size and utilizes `writeUInt8`, `writeUInt16LE`, `writeInt32LE`, or `writeBigInt64LE` based exactly on the data type (e.g., `char`, `int16_t`, `int32_t`). Added a specific handler for `nullptr` to explicitly write 8 bytes of zero.
+- **Lines 619-756 (CJS) / 769-906 (CTS) `pre_scan_local_frame`:** **[CRITICAL ADDITION]** Implemented "PASS 1" of the code generator. This function deeply recurses through every statement, block, `if`, and `while` loop within a function. It calculates the byte width of every parameter and local variable, aligns them to 8-byte boundaries, assigns them a permanent `rbp_offset`, and ultimately calculates the `total_stack_size` aligned strictly to 16 bytes. This alignment is a strict requirement of the System V ABI; without it, calling standard library functions like `printf` would result in a Segmentation Fault.
+- **Lines 758-780 (CJS) / 908-930 (CTS) `compile_param_spills`:** Implemented the mechanism to bridge the hardware and the software. When a standard function is called, the CPU stores arguments in `%rdi`, `%rsi`, `%rdx`, `%rcx`, `%r8`, `%r9`. This function generates the prologue instructions to immediately `mov` those registers into the specific `[rbp - offset]` memory slots determined by PASS 1.
+- **Lines 782-870 (CJS) / 932-1020 (CTS) `compile_main_entry_param_spills`:** Implemented the CRT-less entry logic detailed in the Architectural Overview. It extracts `argc` from `[rbp+8]`, `argv[0]` from `[rbp+16]`, and calculates the `envp` pointer using SIB addressing.
+- **Lines 878-1076 (CJS) / 1028-1226 (CTS) `compile_expr_to_reg`:** A massive new recursive compiler function that evaluates *any* Abstract Syntax Tree expression and guarantees the result will be loaded into the requested hardware register (`reg_name`).
+  - **Constructor Calls:** If evaluating an object instantiation (`Point {1, 2, 3}`), it dynamically allocates memory on the stack (`sub rsp, size`), evaluates all arguments, pushes them to the stack, pushes the address of the allocated memory as the `this` pointer, invokes the constructor via a `call` instruction, and restores the stack.
+  - **Implicit Casts:** Recursively evaluates the target without altering binary size, relying on hardware sub-registers (e.g., truncating to `%al`) to handle type narrowing.
+  - **Variable Resolution:** Intelligently selects between `movzx` (Move with Zero-Extend) for unsigned chars/bools, `movsx` (Move with Sign-Extend) for signed chars, `movsxd` for 32-bit signed integers, and standard `mov` for 64-bit types, utilizing the `get_sub_register` helper to target the exact hardware byte width.
+- **Lines 1078-1144 (CJS) / 1228-1294 (CTS) `compile_lvalue_address`:** Implemented logic to locate the precise memory address of an entity. 
+  - Handles dot (`.`) and arrow (`->`) operators by recursively resolving the parent struct's address, then issuing an `add reg, OFFSET` instruction to pinpoint the exact struct field.
+  - Handles dereferencing (`*ptr`) by intercepting it and returning the value of the pointer itself as the address.
+- **Lines 1146-1178 (CJS) / 1296-1328 (CTS) `compile_subscript_address`:** Evaluates array indexing (`arr[x]`). Computes the base address into `%r10`, pushes it to the stack to prevent corruption, evaluates the index `x` into `%rcx`, pops `%r10`, and issues a Scaled Index Byte `lea dest, [r10 + rcx * SCALE]` instruction based on the element type size.
+- **Lines 1180-1304 (CJS) / 1330-1454 (CTS) `compile_variable_decl_local`:** Handles local variable initialization.
+  - Supports Return Value Optimization (RVO): If initializing from a constructor, it does *not* create a temporary object. It directly passes the final stack offset of the variable as the `this` pointer to the constructor, building it in-place.
+  - Supports Hardware `memcpy`: If copying a structure larger than 8 bytes, it dynamically issues a `rep movsb` hardware instruction to efficiently clone the memory chunk.
+- **Lines 1424-1563 (CJS) / 1574-1713 (CTS) `compile_assignment_stmt`:** Implemented comprehensive assignment operations (`=`, `+=`, `-=`, etc.). Safely pushes the Right-Hand Side (RHS) to the stack, calculates the Left-Hand Side (LHS) address, pops the RHS, and issues the specific mathematical opcode directly against the memory address, respecting signedness and data width.
+- **Lines 1564-1698 (CJS) / 1714-1848 (CTS) `compile_hl_call_statement`:** Generates high-level function calls. It aligns the stack, evaluates arguments right-to-left, pushes them, pushes the `this` pointer (if it's a method call), and pushes the "Hidden Return Pointer" (if the return type is a large struct). It then pops arguments into the SysV registers (`%rdi`...), executes the `call` with a `R_X86_64_PLT32` relocation for external linking, cleans up the stack, and retrieves medium-sized SRET returns from `%rax` and `%rdx`.
+- **Lines 1699-1959 (CJS) / 1849-2109 (CTS) `compile_local_statement`:** Implemented block-level control flow.
+  - **`IfStatement`**: Evaluates the condition, emits a `cmp rax, 0` and a `je` (Jump if Equal) to bypass the `thenBranch`. Handles relative byte offset patching for the `elseBranch`.
+  - **`WhileStatement`**: Records the start offset, evaluates the condition, and emits a `je` to the loop end. Compiles the body, and emits a `jmp` back to the start. **Crucially**, it intercepts any `JumpPatch` objects (`break` or `continue`) emitted by the inner body, verifies the label (`userLabel`), and manually writes the 32-bit relative integer offset directly into the binary buffer (`buf.writeInt32LE`).
+  - **`InspectStatement`**: Emits the jump table for Tagged Unions. It reads the union tag (offset 0, 4 bytes), performs sequential `cmp` and `jne` instructions for each pattern case. It calculates internal payload offsets and binds them to local stack variables, seamlessly translating pattern matching into raw hardware jumps.
+  - **`ReturnStatement`**: Evaluates the return expression. If returning a large struct (SRET), it executes a hardware `rep movsb` copy from `%rax` into the memory address stored in the `__hidden_ret_ptr` local variable, ensuring SysV ABI compliance. It concludes by generating the strict function epilogue: `mov %rsp, %rbp; pop %rbp; ret`.
+- **Lines 2647-2680 (CJS) / 2824-2857 (CTS) `compile_function_declaration`:** Refactored to act as the primary orchestrator. It extracts function access modifiers, triggers PASS 1 (`pre_scan_local_frame`), passes the results into PASS 2 (`compile_function_body_with_frame`), and registers the final byte buffer alongside the computed `stackFrameSize` in `this.fnMap`.
+
+### FILE: `src/backend/targets/x86_64/raptor/operand-parser.cjs` & `src/backend/targets/x86_64/raptor/operand-parser.cts`
+*This component converts AST nodes into low-level operand models.*
+
+- **Lines 29-33 (CJS) / 28-33 (CTS):** Expanded the `ParsedOperand` discriminated union to accept `memory_sib` (Scaled Index Byte), `subscript`, and `subscript_address` types.
+- **Lines 40-79 (CJS) / 64-106 (CTS):** Added robust parsing logic for `subscript` structures and multi-element Tuples (which represent assembly SIB addressing). It strictly validates the scale factor (ensuring it is 1, 2, 4, or 8) and throws an `ExpressionException` if invalid.
+- **Lines 84-86 (CJS) / 111-113 (CTS):** Handled the specific combination of an ampersand (`&`) prefix operating on a `SubscriptExpression`, allowing the driver to request the direct memory address of an array element (e.g., `&arr[x]`) via the new `subscript_address` type.
+
+### FILE: `src/package.json`
+- **Line 21:** Updated the `@types/node` dependency to `^22.19.17` to synchronize typing environments across the monorepo workspaces.
+
+### FILE: `src/parsing/parser.cjs` & `src/parsing/parser.cts`
+*The Recursive Descent Parser responsible for transforming raw tokens into the Abstract Syntax Tree. Completely revamped to support C++ style syntaxes.*
+
+- **Lines 57-89 (CJS) / 60-88 (CTS):** Added extensive `Token.IDENTIFIER` interception within `parse_statement`. The parser now detects and routes keywords for new control flows: `if`, `while`, `return`, `break`, `continue`, `template`, `inspect`, `struct`, `namespace`, `enum`, and `union`. Added a sophisticated lookahead mechanism to determine if an identifier followed by a colon (`goat:`) is an access modifier label or a jump label (`LabelStatement`).
+- **Lines 189-206 (CJS) / 208-221 (CTS):** Modified `parse_variable_declaration` to support array dimension parsing. It loops through `Token.OPEN_SQUARE_BRACKET`, evaluates the inner expression for the array size, and appends it to `arrayDimensions`. It also supports implicit dimensions (e.g., `char buf[]`) by appending a `null` node.
+- **Lines 362-404 (CJS) / 407-456 (CTS):** Overhauled `parse_expression` (the Pratt Parser loop). Added highly complex speculative parsing for generics (`<T>`). When it encounters a `Token.LESS` (`<`), it calls a new helper `lookahead_is_generic()`. It wraps the attempt in a `try/catch` and a snapshot restoration block. If it successfully parses comma-separated types and closes with `>`, it wraps the identifier in a `Syntax.Kind.Generics` node. If it fails (meaning the `<` was actually a less-than mathematical operator), it rewinds the token stream and continues parsing it as a `BinaryExpression`.
+- **Lines 421-426 (CJS) / 477-482 (CTS):** When parsing object access operators (`.` or `->`), the parser now records whether the base identifier is exactly `this` by setting the `_isThisAccess` boolean property. This hint allows the semantic analyzer to quickly enforce structural scoping rules.
+- **Lines 596-602 (CJS) / 692-698 (CTS):** Added `parse_subscript_expression`, parsing standard array access brackets `[` and `]`.
+- **Lines 674-884 (CJS) / 789-1004 (CTS):** **[MAJOR ADDITIONS]** Added the parsers for all high-level language constructs.
+  - **`parse_if_statement`** / **`parse_while_statement`**: Parses standard C-style parenthesized conditions and block bodies.
+  - **`parse_jump_statement`**: Parses `break` and `continue`, capturing optional target labels.
+  - **`parse_struct_declaration`**: Parses `struct Name { ... }`. Traverses fields, dynamically adjusting the `currentAccess` level when it encounters `pub:` or `priv:` labels.
+  - **`parse_enumeration_declaration`** / **`parse_union_declaration`**: Parses members separated by commas. Union parsing permits Rust-style parameterized variants (e.g., `Circle(int32_t)`).
+  - **`parse_template_declaration`**: Consumes `template<typename T, ...>`, builds a `Generics` node, and attaches it as the `templateParams` property to the immediately following struct or function declaration.
+  - **`parse_inspect_statement`**: Parses the `inspect (target) { ... }` pattern matcher. Looks for the `PATTERN_CASE` token (`=>`) and separates the matching pattern from the execution block.
+- **Lines 989-1025 (CJS) / 1176-1212 (CTS) `lookahead_is_generic`:** A brutal heuristic lookahead function. Since `<` can mean "less than" or "open template argument", this function peeks ahead 1 or 2 tokens. If it sees a pattern resembling a type signature (e.g., `<T>`, `<T, U>`, `<T*>`, `<T::U>`, `<const T>`), it returns true, instructing the main parser loop to attempt speculative generic parsing.
+
+### FILE: `src/parsing/semantic_analyzer.cjs` & `src/parsing/semantic_analyzer.cts`
+*This is the brain of the language. It traverses the AST, enforces type safety, calculates memory offsets, and handles template monomorphization.*
+
+- **Lines 27-31 (CJS) / 30-34 (CTS):** Added the `Rules` namespace with `ANONYMOUS_NAMESPACE_MANGLE_GUARD`.
+- **Lines 32-47 (CJS) / 36-58 (CTS):** Massively expanded the `SemanticAnalyzer` class state. Added `templateRegistry` (to store ASTs for deferred template instantiation), `_currentStruct`, `_currentFunction`, `namespacePath` (to track depth within nested namespaces), and `loopStack` (to validate that `break` and `continue` are legally placed).
+- **Lines 49-62 (CJS) / 60-75 (CTS):** **[TEMPLATE ENGINE HOOK]** Integrated an on-the-fly instantiation hook into the `TypeTable`. If a type lookup fails but a generic definition exists, the `TypeTable` fires `onTemplateInstantiate`. The Semantic Analyzer resolves the actual types, calls the internal `instantiate_template` function, deeply clones the AST, rewrites the names, and processes the new instance immediately so the rest of the compilation succeeds.
+- **Lines 339-470 (CJS) / 410-546 (CTS) `instantiate_template`:** The core of the Monomorphization engine. 
+  1. Validates argument counts.
+  2. Resolves the mangled names of the provided types (e.g., `int32_t` -> `7int32_t`).
+  3. Creates a `typeMap` associating the template parameter (e.g., `T`) with the concrete type.
+  4. Uses a deeply recursive `deepCloneAndReplace` function to duplicate the AST. When it hits a `StructToken` identifier that matches a key in `typeMap`, it replaces it with the concrete type. It heavily manipulates `lexem` fields to rewrite the struct and method names into their unique mangled counterparts (e.g., `vector__7int32_t`).
+  5. Backups the global environment, injects the cloned AST back into the processing queue (`analyzer.astRoot.push`), forces an immediate recursive `visit()`, and restores the environment.
+- **Lines 507-535 (CJS) / 615-660 (CTS) `[Syntax.Kind.SubscriptExpression]`:** Validates array indexing. Ensures the base is a Pointer/Array type, resolves the inner type (`points_to`), and explicitly annotates the node as a `ValueCategory.LValue` so the driver knows it can be assigned to.
+- **Lines 536-650 (CJS) / 666-829 (CTS) `[Syntax.Kind.VariableDeclaration]`:** 
+  - Prepends the active `namespacePath` to global variables to prevent naming collisions.
+  - Implements **Structure Initialization via Lists (`{ ... }`)**. If the initializer is a `List`, it determines the type, evaluates the AST nodes of the arguments, looks up the target structure, queries the `TypeChecker` for a matching constructor, and explicitly annotates the variable declaration with the resolved `_constructorCall` data for the code generator.
+- **Lines 654-862 (CJS) / 835-1088 (CTS) `[Syntax.Kind.Identifier]`:** 
+  - Handles the `::` scope resolution operator. If the scope is `this`, rewrites it to `$anon` for internal tracking.
+  - Handles the `this` keyword. Looks up `_currentStruct`, generates a Pointer QualType, and returns it as a `PRValue`.
+  - Handles struct field access (`.` and `->`). Validates that the base is a Struct/Pointer, looks up the field name in the TypeTable, checks access permissions (enforcing `pub`/`priv`/`protected` boundaries using `checkMemberAccess`), and attaches the memory `_fieldOffset` to the AST node.
+  - Resolves Enum and Union variants. If `Shape::Circle` is encountered, it determines the type, extracts the union tag and payload data, and generates a `_constructorCall` annotation instructing the hardware generator to format a tagged union initialization.
+- **Lines 878-953 (CJS) / 1099-1229 (CTS) `[Syntax.Kind.BinaryExpression]`:** Validates assignment operations. Evaluates the left-hand side, then evaluates the right-hand side. Calls `TypeChecker.check_assignment` (for strict assignment) or `InitializerChecker.check` (for looser assignments like function pointers). Immediately throws if attempting to mutate a `const`-qualified `LValue`. Forces all logical operations (`&&`, `||`, `==`, `<`, etc.) to resolve explicitly to the `bool` primitive type.
+- **Lines 986-1077 (CJS) / 1269-1320 (CTS) `[Syntax.Kind.Instruction]`:** For `@section`, it evaluates the expressions inside the block, verifies they are compile-time constants using `infer_section_field_type`, and registers them as `StorageClass.Static` symbols in the environment.
+- **Lines 1079-1335 (CJS) / 1350-1649 (CTS) `[Syntax.Kind.FunctionDeclaration]`:** 
+  - Extracts the parent struct if the function name uses the `::` operator.
+  - Checks if the function is a template. If so, stores it in the `templateRegistry` and aborts further processing (waiting for an instantiation call).
+  - Dynamically synthesizes the implicit `this` pointer argument if the function belongs to a struct. It generates a fake `Syntax.Kind.ParameterDeclaration` node of type `StructName*` and unshifts it into the `parameters` array.
+  - Dynamically synthesizes the `__hidden_ret_ptr` argument. If the return type is > 16 bytes, it unshifts a `void*` parameter to the front of the list, enforcing SysV SRET compliance.
+  - Generates the heavily mangled unique function name by aggregating the mangled names of all parameter types (e.g., `Point__set_x__PKc`), enabling true Function Overloading.
+- **Lines 1338-1510 (CJS) / 1652-1815 (CTS) `[Syntax.Kind.Call]`:**
+  - **SIZEOF Interception:** If the function call is to `sizeof()`, it aborts standard resolution, resolves the byte-size of the argument, mutates the AST node entirely in-place turning it into a `Syntax.Kind.Literal` `NumberLiteral` containing the byte size, and resolves it as a constant `PRValue`.
+  - Performs Overload Resolution. It collects all matching function definitions from the `OverloadSetType`, filters by parameter count, checks for exact type matches, and if none exist, checks for valid implicit conversion matches using `TypeChecker.check_initialization`. Annotates the Call node with the precise mangled name of the winning candidate.
+- **Lines 1513-1579 (CJS) / 1819-1884 (CTS) `[Syntax.Kind.List]`:** Resolves tuple evaluations, and performs complex struct instantiation matching when encountering `Type { ... }` syntaxes, matching the arguments to the correct constructor overload.
+- **Lines 1582-1628 (CJS) / 1888-1934 (CTS) `[Syntax.Kind.StructDeclaration]`:** Registers a new struct. Iterates through all fields, calculates their primitive sizes, enforces proper 8-byte memory alignment padding (`alignment - (currentOffset % alignment)`), assigns physical byte offsets to each field, and registers the total aligned size into the `TypeTable`.
+- **Lines 1632-1718 (CJS) / 1938-2024 (CTS) Namespace, Enum, and Union Declarations:**
+  - Manages `analyzer.namespacePath` pushing and popping to isolate scopes.
+  - Registers Enums with sequential integer values.
+  - Registers Tagged Unions. Iterates through the variants, assigns an ascending integer tag, calculates the maximum payload size across all variants, adds 4 bytes for the tag, and aligns the total union size to 8 bytes.
+- **Lines 1721-1779 (CJS) / 2028-2086 (CTS) `[Syntax.Kind.InspectStatement]`:** Analyzes pattern matching. Asserts the target is a valid Tagged Union. Creates a localized `SymbolTable.Environment` for each `case` block. Matches the case payload parameters (e.g., `w`, `h`) to the internal Union payload types, and injects them as active local variables into the environment, allowing the body block to reference them safely.
+- **Lines 1785-1854 (CJS) / 2092-2161 (CTS) Control Flow:** 
+  - Scopes blocks.
+  - Tracks `while` and `if` execution. 
+  - Manages the `loopStack`. When processing a `LabelStatement`, it pushes the label to the stack. When processing a `JumpStatement` (`break` or `continue`), it verifies that the stack contains an active loop and that the requested label exists, preventing invalid jump requests at compile-time.
+
+### FILE: `src/parsing/type-checker.cjs` & `src/parsing/type-checker.cts`
+*The TypeChecker is responsible for ensuring type compatibility, applying implicit conversions, and maintaining strict memory safety across operations.*
+
+- **Lines 17-25 (CJS) / 16-24 (CTS):** Expanded the `TypeSystem.TypeKind` enumeration. Added `Struct`, `Enum`, `Union`, and `OverloadSet`. This allows the type system to differentiate between complex aggregate types and standard primitives or aliases.
+- **Lines 117-122 (CJS) / 130-138 (CTS):** Modified the `PrimitiveType.is_assignable_to` method. Previously, assigning a larger primitive to a smaller one (e.g., `int32_t` to `char`) was blocked. The logic was updated to return `true` unconditionally for primitive-to-primitive assignments, allowing the hardware backend to naturally handle narrowing conversions by emitting appropriate sub-register operations (e.g., loading into `%al` instead of `%eax`).
+- **Lines 276-291 (CJS) / 299-325 (CTS):** Created the `StructType` class. It manages a `Map` of fields (containing `QualType`, `offset`, `size`, and `access` modifiers), a `totalSize` integer, an `alignment` integer, and a `Map` of `methods`. Methods track their corresponding `FunctionAnyType`, AST `node`, `access` level, constructor/destructor flags, and unique `mangledName`.
+- **Lines 292-304 (CJS) / 327-340 (CTS):** Created the `EnumType` class. Tracks a `Map` of member string names to their corresponding integer values. The `size` method returns a hardcoded 4 (bytes).
+- **Lines 305-322 (CJS) / 342-364 (CTS):** Created the `TaggedUnionType` class. Tracks a `variants` map containing the integer `tag` and an array of `payloadTypes` (represented as `QualType`s). The `size` method dynamically calculates the maximum payload size, adds 4 bytes for the tag, and rounds up to the nearest 8-byte boundary to ensure strict memory alignment.
+- **Lines 323-332 (CJS) / 366-373 (CTS):** Created the `OverloadSetType` class. This type acts as a temporary container during semantic analysis, holding an array of potential function candidates. Its `is_assignable_to` method always returns `false`, ensuring it must be resolved into a concrete `FunctionAnyType` before code generation.
+- **Lines 344-365 (CJS) / 381-409 (CTS):** Refactored the `TypeTable` class.
+  - Implemented the Singleton pattern (`getInstance()`) to provide a unified global type registry accessible across different semantic and resolution phases.
+  - Updated the initialization of the `char` primitive type to set the `isSigned` flag to `true`, fixing bugs related to sign-extension during hardware memory loads.
+  - Added `pushStructContext` and `popStructContext` methods, which track the `_currentStruct` state, allowing the `TypeResolver` to correctly deduce the `Self` keyword.
+- **Lines 395-435 (CJS) / 442-475 (CTS):** Implemented `findConstructor` in the `TypeChecker`. This function takes a `StructType` and an array of provided argument types (`argTypes`). It extracts all methods flagged as constructors. It then iterates through the candidates twice:
+  - **Pass 1:** Checks for an exact type match (ignoring the implicit `this` parameter).
+  - **Pass 2:** If no exact match is found, it attempts to find a match using implicit conversions via `check_initialization`.
+  It returns the matching `fnType` and AST `node`, or `null` if resolution fails.
+- **Lines 436-459 (CJS) / 477-505 (CTS):** Implemented `checkMemberAccess` in the `TypeChecker`. This function enforces encapsulation. It accepts a `StructType`, a `memberName`, and an execution context. It queries the struct's fields and methods. If the member is marked `priv` (private) or `protected`, it verifies that the `context.currentStruct` matches the target struct. If it does not, it returns `{ ok: false, reason: '... is private' }`.
+- **Lines 473-518 (CJS) / 528-567 (CTS):** Updated `check_initialization`. It now accepts an optional `typeTable` parameter. If provided, it invokes `TypeResolver.normalize_type_with_context` to safely resolve the `Self` keyword into the concrete structure type before checking assignment compatibility.
+- **Lines 563-581 (CJS) / 646-673 (CTS):** Updated the `SymbolTable.Environment`. Modified the `symbols` map to store an array of `SymbolRecord`s (`Map<string, SymbolRecord[]>`) rather than a single record. This is the foundational change that permits Function Overloading. When `define` is called with a `SymbolKind.Function`, it pushes the new record into the array. If a non-function symbol attempts to redefine an existing name, it throws an `ExpressionException`.
+
+### FILE: `src/parsing/type_resolver.cjs` & `src/parsing/type_resolver.cts`
+*The TypeResolver converts AST nodes into strictly qualified `TypeSystem` objects.*
+
+- **Lines 15-30 (CJS) / 21-34 (CTS):** Expanded the `NodeAnnotation` interface. Added `_isThisField`, `_fieldOffset`, `_fieldSize` for memory tracking. Added `_methodAccess`, `_constructorSignature`, `_constructorCall`, and `_mangledName` to assist the driver in resolving overloaded structures and methods.
+- **Lines 35-39 (CJS) / 73-83 (CTS):** Updated `resolve_declaration_type` and `resolve_inner` to accept an optional `namespacePath: string[]` parameter, enabling the resolver to locate types hidden deeply within nested namespaces.
+- **Lines 63-72 (CJS) / 103-113 (CTS):** Added `normalize_type_with_context`. This crucial helper intercepts the `Self` identifier. If `Self` is encountered, it queries the `typeTable._currentStruct` context and returns the actual `StructType` instance, allowing constructors to return `Self` safely.
+- **Lines 73-128 (CJS) / 115-180 (CTS):** Major upgrades to `resolve_inner` for Identifier resolution:
+  - Added template instantiation triggers. If the node contains `generics`, it invokes `typeTable.onTemplateInstantiate` to command the semantic analyzer to generate the required structure on-the-fly. It then mangles the generic arguments (e.g., `vector__7int32_t`) and performs a lookup.
+  - Implemented hierarchical namespace lookup. It iterates backwards through the `namespacePath` array, appending prefixes (e.g., `std__pair`, then `pair`) until it successfully locates the type in the `TypeTable`.
+  - Added a fallback for the template parsing context. If a type is completely unknown but the table is flagged with `_isInTemplateContext` (meaning the compiler is currently parsing the raw template structure itself), it generates a dummy 8-byte `PrimitiveType` to prevent the parser from crashing on unknown generic tokens like `T`.
+- **Lines 173-190 (CJS) / 244-272 (CTS):** Updated `resolve_function_pointer` to accept and pass the `namespacePath` recursively to all inner resolutions, ensuring function pointers utilizing namespaced types (e.g., `void (*)(std::vector<int>)`) resolve correctly.
+- **Lines 264-269 (CJS) / 355-360 (CTS):** Enhanced the `InitializerChecker` for character literals. Previously, providing an escape sequence like `'\n'` crashed the compiler because the string length was 2. It now routes the inner string through `Interpreter.string_view.interpretEscapeSequences`. If the resolved length is 1, it allows the initialization, enabling standard C-style escape characters.
+
+### FILE: `src/types/expression.cjs` & `src/types/expression.cts`
+*Defines the structure of the Abstract Syntax Tree (AST).*
+
+- **Lines 13-33 (CJS) / 10-38 (CTS):** Massive expansion of the `Syntax.Kind` enumeration to support the new systems language features:
+  - Removed `Application`. Replaced entirely with `Call`.
+  - Added `SubscriptExpression` (for array indexing).
+  - Added `StructDeclaration`, `NamespaceDeclaration`, `EnumerationDeclaration`, and `UnionDeclaration`.
+  - Added full control flow nodes: `IfStatement`, `WhileStatement`, `JumpStatement`, `LabelStatement`, `ReturnStatement`.
+  - Added pattern matching nodes: `InspectStatement`, `InspectCase`.
+  - Added `ThisLiteral`.
+- **Lines 98-103 (CJS) / 132-140 (CTS):** Implemented the factory classes for `ThisLiteral` and `SubscriptExpression`.
+- **Lines 127-130 (CJS) / 185-192 (CTS):** Updated the `Identifier` class definition. Removed `operator` and `forward` constraints, added `generics: Node<Kind.Generics>`, and added the internal `_isThisAccess` boolean flag to track scope context.
+- **Lines 143-167 (CJS) / 217-299 (CTS):** Implemented all new factory classes corresponding to the expanded `Syntax.Kind` enumeration. 
+  - `VariableDeclaration` added `arrayDimensions` and `_access`.
+  - `FunctionDeclaration` added `templateParams`, `isDefaulted`, and `isDeleted`.
+  - `StructDeclaration` tracks `modifiers`, `templateParams`, `name`, and `fields`.
+  - `InspectStatement` tracks a `target` expression and an array of `InspectCase` nodes.
+
+### FILE: `src/types/token.cjs` & `src/types/token.cts`
+*Defines the lexical tokens generated by the scanner.*
+
+- **Lines 56-58 (CJS) / 52-54 (CTS):** Expanded the `Token` enumeration. Added `PATTERN_CASE` (mapped to `=>`) to support the new `inspect` syntax.
+- **Lines 90-109 (CJS) / 89-106 (CTS):** Massively expanded the `ReserveIdentifier` enumeration, adding the essential keywords required for the new language capabilities:
+  - `RID_SIZEOF` (`sizeof`)
+  - `RID_INSPECT` (`inspect`)
+  - `RID_PUBLIC` (`pub`)
+  - `RID_PRIVATE` (`priv`)
+  - `RID_UNION` (`union`)
+  - `RID_WHILE` (`while`), `RID_BREAK` (`break`), `RID_CONTINUE` (`continue`).
+- **Lines 60-64 (CJS) / 58-62 (CTS):** Added the `TokenOf` utility class, providing a clean `TokenOf.is(token, kind)` static method to simplify parser logic.
+
+### FILE: `src/types/unwrap.cjs` & `src/types/unwrap.cts`
+*Utility functions for safely extracting data and raw strings from AST nodes.*
+
+- **Lines 49-65 & 77-90 (CJS) / 47-60 & 70-84 (CTS):** Updated the `get_start_token` recursive extractor to support all the new AST nodes. This ensures that if a semantic error occurs inside an `IfStatement` or an `InspectCase`, the compiler can trace it back to the exact line number in the source file by extracting the `condition` or `pattern` tokens respectively.
+- **Lines 111-143 (CJS) / 99-141 (CTS):** Introduced the `Operator` namespace. This namespace encapsulates an `Operator.Kind` string enum mapping textual operators (e.g., `+`, `+=`, `::`) to semantic identifiers. The `Operator.is(target, op)` function safely determines if a raw `StructToken` or a complex `Syntax.Kind.Identifier` node represents the requested operation.
+- **Lines 148-175 (CJS) / 148-180 (CTS):** Implemented `emit_identifier`. This is a highly complex string generator used heavily by the Semantic Analyzer to resolve namespaces and generics.
+  - Recursively unwraps base identifiers (e.g., peeling away a `vector<T>` shell to retrieve just `vector`).
+  - Merges identifiers split by the scope resolution operator `::`.
+  - Replaces `this` with the internal `$anon` marker.
+  - Applies "read-time mangling": If the identifier is flagged as anonymous (`$anon`) and a namespace path is active, it physically prepends the entire namespace hierarchy directly into the returned raw string, guaranteeing isolated resolution.
+
+### NEW FILE: `examples/g4/libm_test.c`
+*This is an entirely new C source file designed to test the ABI compatibility of the compiler.*
+- **Lines 1-38:** A standard C program. It declares external C-linkage functions (`add`, `sub`, `lc_print`) mapped directly to the mangled names generated by the new compiler (e.g., `asm("add__void")`). It invokes these functions with primitive arguments, captures the responses, and validates them against expected mathematical outcomes. This proves that the new code generator flawlessly adheres to the System V ABI for both parameter passing and return values, allowing the custom language to be seamlessly linked against standard GCC/Clang projects.
+
+### NEW FILE: `examples/g4/module.asmx`
+*A minimal external module to test the AST expansion pipeline.*
+- **Lines 1-3:** Defines a simple `add` function. This file is targeted by the `@import "module.asmx";` directive in the main compile script to prove that the `ModuleExpander` successfully intercepts, parses, and injects external AST nodes before semantic analysis begins.
+
+### NEW FILE: `include/stdlib/optional.asmx`
+*The first component of the new standard library, demonstrating advanced generics and memory architecture.*
+- **Lines 1-33:** Defines `std::optional<T>`, inspired heavily by C++. 
+  - Uses `priv:` to encapsulate `_has_value` (boolean) and `_value` (generic type `T`).
+  - Provides two overloaded `pub constructor optional::init` definitions: one for an empty state, one containing a value.
+  - Provides `has_value()`, `value()`, and `value_or(T)` methods, utilizing the implicitly passed `this` pointer for state management.
+  - Because `optional<T>` exceeds 8 bytes in size, this script serves as the primary integration test for the compiler's **SRET (Hidden Return Pointer)** and Return Value Optimization (RVO) mechanics.
+
+### NEW FILE: `include/stdlib/pair.asmx`
+*The second component of the standard library.*
+- **Lines 1-25:** Defines `std::pair<T, U>`.
+  - Demonstrates multi-parameter generics.
+  - Declares public `first` and `second` fields.
+  - Provides an `init` constructor that assigns both values directly to the `this` pointer.
+  - Provides `get_first()` and `get_second()` accessor methods.
+
+### NEW FILE: `src/parsing/module_expander.cjs` & `src/parsing/module_expander.cts`
+*This is a completely new architectural component introduced to support recursive multi-file compilation.*
+- **Lines 10-14 (CJS) / 11-15 (CTS):** Initializes the `ModuleExpander` class. Contains a `Set<string>` named `loadedFiles` acting as a strict Import Guard to prevent infinite recursion during circular imports. Defines a hardcoded `stdLibPath` pointing to the internal `include/stdlib` directory.
+- **Lines 15-56 (CJS) / 17-69 (CTS) `expand`:** The core AST splicing algorithm.
+  - Iterates through the provided AST node array.
+  - Intercepts `Syntax.Kind.Instruction` nodes named `@include` or `@import`.
+  - Differentiates resolution logic: `@include` resolves relative to the `stdLibPath`, while `@import` resolves relative to the `currentFilePath`.
+  - Checks the Import Guard. If the file is already in `loadedFiles`, it skips it, safely pruning circular references.
+  - Reads the target file from the filesystem.
+  - Spawns a completely new Lexer and `RecursiveDescentParser` instance. Parses the raw text into a fresh, isolated AST.
+  - **Recursion:** Calls `this.expand()` on the newly generated AST, ensuring that if the imported file imports *other* files, they are fully resolved first.
+  - Pushes the resulting expanded AST nodes directly into the main node array.
+  - Finally, it discards the original `@include` AST node, ensuring the semantic analyzer only sees the imported code.
+

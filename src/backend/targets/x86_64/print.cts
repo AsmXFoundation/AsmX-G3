@@ -144,17 +144,6 @@ class PrintTree {
         break;
       }
 
-      case Syntax.Kind.Application: {
-        const appNode = node as Syntax.Node<Syntax.Kind.Application>;
-        if (appNode.name && this.isNode(appNode.name)) {
-          desc += ` ${this.#getNodeBrief(appNode.name)}`;
-        }
-        if (appNode.generics) desc += ` ${this.C.dim}<...>${this.C.reset}`;
-        if (appNode.parameters) desc += ` ${this.C.dim}(...)${this.C.reset}`;
-        if (appNode.returnType) desc += ` ${this.C.dim}-> ...${this.C.reset}`;
-        break;
-      }
-
       case Syntax.Kind.Closure: {
         const closureNode = node as Syntax.Node<Syntax.Kind.Closure>;
         if (closureNode.capture) desc += ` ${this.C.dim}[capture]${this.C.reset}`;
@@ -299,6 +288,11 @@ class PrintTree {
           children.push({ node: item, role });
         }
       }
+    } else if (value instanceof StructToken && value.type == Token.IDENTIFIER) {
+      const releaseToken = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
+        selector: new Syntax.NodeShape({ kind: Syntax.Kind.Identifier, token: value })
+      });
+      children.push({ node: releaseToken, role });
     }
   }
 
@@ -346,18 +340,10 @@ class PrintTree {
         break;
 
       case Syntax.Kind.Identifier:
+        this.#addChild(children, "template", (node as any).generics);
         break;
 
       case Syntax.Kind.Literal:
-        break;
-
-      case Syntax.Kind.Application:
-        this.#addChild(children, "name", (node as any).name);
-        this.#addChild(children, "generics", (node as any).generics);
-        this.#addChild(children, "parameters", (node as any).parameters);
-        this.#addChild(children, "returnType", (node as any).returnType);
-        this.#addChild(children, "body", (node as any).body);
-        if ((node as any).attributes) this.#addChild(children, "attributes", (node as any).attributes);
         break;
 
       case Syntax.Kind.Closure:
@@ -394,7 +380,7 @@ class PrintTree {
       }
 
       case Syntax.Kind.VariableDeclaration: {
-        const varNode = node as any;
+        const varNode = node as InstanceType<typeof Syntax.RegistryMap[Syntax.Kind.VariableDeclaration]>;
         if (varNode.modifiers?.length) {
           for (const modToken of varNode.modifiers) {
             const modNode = new Syntax.RegistryMap[Syntax.Kind.Identifier]({
@@ -407,6 +393,7 @@ class PrintTree {
         this.#addChild(children, "type", varNode.typeNode);
         this.#addChild(children, "name", varNode.name);
         this.#addChild(children, "initializer", varNode.initializer);
+        this.#addChild(children, "arrayDimensions", varNode.arrayDimensions);
         break;
       }
 
@@ -430,6 +417,7 @@ class PrintTree {
         }
         this.#addChild(children, "returnType", funcNode.returnType);
         this.#addChild(children, "body", funcNode.body);
+        this.#addChild(children, "templateParams", funcNode.templateParams);
         break;
       }
 

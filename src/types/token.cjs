@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ReserveIdentifierCoder = exports.ReserveIdentifier = exports.TokenStream = exports.StructToken = exports.Token = void 0;
+exports.TokenOf = exports.ReserveIdentifierCoder = exports.ReserveIdentifier = exports.TokenStream = exports.StructToken = exports.Token = void 0;
 exports.normalizeToken = normalizeToken;
 const exceptions = require('llvm.js/exceptions');
 var Token;
@@ -53,15 +53,23 @@ var Token;
     Token[Token["OPERATOR_OR"] = 45] = "OPERATOR_OR";
     Token[Token["ELLIPSIS"] = 46] = "ELLIPSIS";
     Token[Token["ARROW"] = 47] = "ARROW";
-    Token[Token["SCOPE"] = 48] = "SCOPE";
-    Token[Token["EOF"] = 49] = "EOF";
+    Token[Token["PATTERN_CASE"] = 48] = "PATTERN_CASE";
+    Token[Token["SCOPE"] = 49] = "SCOPE";
+    Token[Token["EOF"] = 50] = "EOF";
 })(Token || (exports.Token = Token = {}));
+class TokenOf {
+    static is(t, k) {
+        return t.type == k;
+    }
+}
+exports.TokenOf = TokenOf;
 var ReserveIdentifier;
 (function (ReserveIdentifier) {
     ReserveIdentifier["RID_STATIC"] = "static";
     ReserveIdentifier["RID_CONST"] = "const";
     ReserveIdentifier["RID_EXTERN"] = "extern";
     ReserveIdentifier["RID_TYPEDEF"] = "typedef";
+    ReserveIdentifier["RID_SIZEOF"] = "sizeof";
     ReserveIdentifier["RID_INLINE"] = "inline";
     ReserveIdentifier["RID_VOLATILE"] = "volatile";
     ReserveIdentifier["RID_AUTO"] = "auto";
@@ -82,11 +90,13 @@ var ReserveIdentifier;
     ReserveIdentifier["RID_MUTABLE"] = "mutable";
     ReserveIdentifier["RID_STRUCT"] = "struct";
     ReserveIdentifier["RID_ENUM"] = "enum";
-    ReserveIdentifier["RID_PUBLIC"] = "public";
-    ReserveIdentifier["RID_PRIVATE"] = "private";
+    ReserveIdentifier["RID_INSPECT"] = "inspect";
+    ReserveIdentifier["RID_PUBLIC"] = "pub";
+    ReserveIdentifier["RID_PRIVATE"] = "priv";
     ReserveIdentifier["RID_PROTECTED"] = "protected";
     ReserveIdentifier["RID_TEMPLATE"] = "template";
     ReserveIdentifier["RID_NAMESPACE"] = "namespace";
+    ReserveIdentifier["RID_UNION"] = "union";
     ReserveIdentifier["RID_OPERATOR"] = "operator";
     ReserveIdentifier["RID_THIS"] = "this";
     ReserveIdentifier["RID_THROW"] = "except";
@@ -95,6 +105,9 @@ var ReserveIdentifier;
     ReserveIdentifier["RID_TYPENAME"] = "typename";
     ReserveIdentifier["RID_TYPEID"] = "typeid";
     ReserveIdentifier["RID_USING"] = "using";
+    ReserveIdentifier["RID_WHILE"] = "while";
+    ReserveIdentifier["RID_BREAK"] = "break";
+    ReserveIdentifier["RID_CONTINUE"] = "continue";
     /* casts */
     ReserveIdentifier["RID_CONSTCAST"] = "const_cast";
     ReserveIdentifier["RID_DYNAMICCAST"] = "dynamic_cast";

@@ -5,6 +5,7 @@ const expression_cjs_1 = require("../../../../types/expression.cjs");
 const token_cjs_1 = require("../../../../types/token.cjs");
 const unwrap_cjs_1 = require("../../../../types/unwrap.cjs");
 const main_cjs_1 = require("../hwm/main.cjs");
+const exceptions = require("llvm.js/exceptions");
 // ---------------------------------------------------------------------------
 // OperandParser namespace
 // ---------------------------------------------------------------------------
@@ -36,11 +37,53 @@ var OperandParser;
             const name = unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
             return { type: 'variable_value', value: name };
         }
+        if (node.kind == expression_cjs_1.Syntax.Kind.SubscriptExpression) {
+            return { type: "subscript", node };
+        }
+        // ---- List / Tuple  →  SIB addressing  (%base, %index, scale[, disp]) ----
+        // Must be checked BEFORE the UnaryExpression guard below.
+        if (node.kind === expression_cjs_1.Syntax.Kind.List && node.type == expression_cjs_1.Syntax.Type.Tuple) {
+            const elems = node.elements ?? [];
+            if (elems.length >= 3) {
+                const extract_reg = (n) => {
+                    if (n.kind !== expression_cjs_1.Syntax.Kind.UnaryExpression)
+                        return null;
+                    const ue2 = n;
+                    if (ue2.operator?.type !== token_cjs_1.Token.PERCENT)
+                        return null;
+                    if (ue2.operand?.kind !== expression_cjs_1.Syntax.Kind.Identifier)
+                        return null;
+                    return unwrap_cjs_1.UnwrapSyntax.unwrap(ue2.operand).raw;
+                };
+                const base = extract_reg(elems[0]);
+                const index = extract_reg(elems[1]);
+                const scale_node = elems[2];
+                const scale_raw = scale_node?.kind === expression_cjs_1.Syntax.Kind.Literal
+                    ? parseInt(unwrap_cjs_1.UnwrapSyntax.unwrap(scale_node).raw, 10)
+                    : null;
+                if (base && index && scale_raw !== null && !isNaN(scale_raw)) {
+                    let displacement;
+                    if (elems.length >= 4) {
+                        const disp_node = elems[3];
+                        if (disp_node?.kind === expression_cjs_1.Syntax.Kind.Literal) {
+                            displacement = parseInt(unwrap_cjs_1.UnwrapSyntax.unwrap(disp_node).raw, 10);
+                        }
+                    }
+                    if (![1, 2, 4, 8].includes(scale_raw)) {
+                        new exceptions.ExpressionException("Invalid scale factor", unwrap_cjs_1.UnwrapSyntax.get_start_token(node));
+                    }
+                    return { type: 'memory_sib', size: 8, base, index, scale: scale_raw, displacement };
+                }
+            }
+        }
         // ---- All other operands are UnaryExpression with a prefix operator ------
         if (node.kind !== expression_cjs_1.Syntax.Kind.UnaryExpression)
             return null;
         const ue = node;
         const op = ue.operator?.type;
+        if (op === token_cjs_1.Token.AMPERSAND && ue.operand?.kind === expression_cjs_1.Syntax.Kind.SubscriptExpression) {
+            return { type: 'subscript_address', node: ue.operand };
+        }
         // *%rax  →  memory_register  (indirect register addressing)
         if (op === token_cjs_1.Token.STAR && ue.operand?.kind === expression_cjs_1.Syntax.Kind.UnaryExpression) {
             const inner = ue.operand;
@@ -79,6 +122,8 @@ var OperandParser;
             }
             // Named constant / variable value
             if (operand.kind === expression_cjs_1.Syntax.Kind.Identifier) {
+                if (node.operator.type != token_cjs_1.Token.DOLLAR)
+                    return null;
                 const name = unwrap_cjs_1.UnwrapSyntax.unwrap(operand).raw;
                 return { type: 'variable_value', value: name };
             }

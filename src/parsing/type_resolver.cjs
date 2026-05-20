@@ -2,8 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.InitializerChecker = exports.TypeResolver = exports.Annotations = exports.StorageClass = void 0;
 exports.annotate = annotate;
+const interpreter_cjs_1 = require("../backend/targets/x86_64/raptor/interpreter.cjs");
 const expression_cjs_1 = require("../types/expression.cjs");
 const unwrap_cjs_1 = require("../types/unwrap.cjs");
+const mangle_cjs_1 = require("./mangle.cjs");
 const type_checker_cjs_1 = require("./type-checker.cjs");
 const exceptions = require("llvm.js/exceptions");
 var StorageClass;
@@ -29,9 +31,9 @@ function annotate(node, ann) {
 //
 var TypeResolver;
 (function (TypeResolver) {
-    function resolve_declaration_type(modifiers, typeNode, typeTable, reportToken) {
+    function resolve_declaration_type(modifiers, typeNode, typeTable, reportToken, namespacePath = []) {
         const base_cv = collect_cv_from_modifiers(modifiers);
-        const { type, cv } = resolve_inner(typeNode, typeTable, base_cv, reportToken);
+        const { type, cv } = resolve_inner(typeNode, typeTable, base_cv, reportToken, namespacePath);
         return new type_checker_cjs_1.TypeSystem.QualType(type.kind, type, cv);
     }
     TypeResolver.resolve_declaration_type = resolve_declaration_type;
@@ -58,13 +60,72 @@ var TypeResolver;
         return cv;
     }
     TypeResolver.collect_cv_from_modifiers = collect_cv_from_modifiers;
-    function resolve_inner(node, typeTable, base_cv, reportToken) {
-        if (node.kind == expression_cjs_1.Syntax.Kind.Identifier && !node.forward) {
-            const name = node.selector.token.lexem ?? unwrap_cjs_1.UnwrapSyntax.unwrap(node).raw;
-            const found = typeTable.lookup(name);
+    function normalize_type_with_context(qt, typeTable) {
+        if (qt.type.name === "Self" && typeTable._currentStruct) {
+            const selfType = typeTable.lookup(typeTable._currentStruct);
+            if (selfType) {
+                return new type_checker_cjs_1.TypeSystem.QualType(selfType.kind, selfType, qt.cv);
+            }
+        }
+        return qt.resolve();
+    }
+    TypeResolver.normalize_type_with_context = normalize_type_with_context;
+    function resolve_inner(node, typeTable, base_cv, reportToken, namespacePath = []) {
+        if (node.kind == expression_cjs_1.Syntax.Kind.Identifier) {
+            // We use emit_identifier, which resolves the structure (including generics).
+            const name = unwrap_cjs_1.UnwrapSyntax.emit_identifier({ namespacePath }, node);
+            if (name === "Self" && typeTable._currentStruct) {
+                const selfType = typeTable.lookup(typeTable._currentStruct);
+                if (selfType) {
+                    return { type: selfType, cv: base_cv };
+                }
+            }
+            let finalNameToLookup = name;
+            let typeArgsMangled = "";
+            // ⚡ Type instantiation (if it is a template)
+            if (node.generics && node.generics.elements.length > 0) {
+                // ⚡ AUTO-INSTANTIATION: Signaling to the semantics that we urgently need this type!
+                if (typeof typeTable.onTemplateInstantiate === 'function') {
+                    typeTable.onTemplateInstantiate(name, node.generics.elements, reportToken, namespacePath);
+                }
+                const typeArgs = node.generics.elements.map((gNode) => {
+                    const qt = TypeResolver.resolve_declaration_type([], gNode, typeTable, reportToken, namespacePath);
+                    return mangle_cjs_1.MangleService.Mangler.mangle_qualtype(qt);
+                });
+                const mangledTemplateName = `${name}__${typeArgs.join("_")}`;
+                const found = typeTable.lookup(mangledTemplateName);
+                if (found) {
+                    return { type: found, cv: base_cv };
+                }
+                else {
+                    new exceptions.ExpressionException(`Template '${name}' is not instantiated for types <${typeArgs.join(", ")}>`, reportToken);
+                    return { type: typeTable.lookup(type_checker_cjs_1.TypeSystem.PrimitiveTypeEnumeration.VOID), cv: base_cv };
+                }
+            }
+            // ⚡ SCALABLE NAMESPACE TYPE LOOKUP
+            let found = undefined;
+            for (let i = namespacePath.length; i >= 0; i--) {
+                const ns_prefix = namespacePath.slice(0, i).join("__");
+                // Substitute the namespace prefix, then append the template arguments.
+                // For example: ns="std", name="pair" -> "std__pair__7int32_t_PKc"
+                const try_base_name = ns_prefix ? (ns_prefix + "__" + name) : name;
+                const try_name = typeArgsMangled ? (try_base_name + typeArgsMangled) : try_base_name;
+                found = typeTable.lookup(try_name);
+                if (found)
+                    break;
+            }
             if (!found) {
-                new exceptions.ExpressionException(`Unknown type name '${name}'`, unwrap_cjs_1.UnwrapSyntax.unwrap(node).token ?? reportToken);
-                // fallback — void
+                if (typeArgsMangled) {
+                    new exceptions.ExpressionException(`Template '${name}' is not instantiated for types <${typeArgsMangled.substring(2).replace(/_/g, ', ')}>`, reportToken);
+                }
+                else {
+                    // Hack for the context within the template parsing itself, when types 'T' and 'U' are not yet known.
+                    if (typeTable._isInTemplateContext) {
+                        const templateType = new type_checker_cjs_1.TypeSystem.PrimitiveType(name, 8, false);
+                        return { type: templateType, cv: base_cv };
+                    }
+                    new exceptions.ExpressionException(`Unknown type name '${name}'`, unwrap_cjs_1.UnwrapSyntax.unwrap(node).token ?? reportToken);
+                }
                 return { type: typeTable.lookup(type_checker_cjs_1.TypeSystem.PrimitiveTypeEnumeration.VOID), cv: base_cv };
             }
             return { type: found, cv: base_cv };
@@ -73,7 +134,7 @@ var TypeResolver;
         // if (node.kind == Syntax.Kind.UnaryExpression && node.isPostfix) {
         if (node.kind == expression_cjs_1.Syntax.Kind.UnaryExpression) {
             const op = node.operator.lexem ?? "";
-            const inner = resolve_inner(node.operand, typeTable, base_cv, reportToken);
+            const inner = resolve_inner(node.operand, typeTable, base_cv, reportToken, namespacePath);
             switch (op) {
                 case "*": {
                     const pints_to_qt = new type_checker_cjs_1.TypeSystem.QualType(inner.type.kind, inner.type, inner.cv);
@@ -109,7 +170,7 @@ var TypeResolver;
     // AST: Call(Call('int', [*funcPtr]), [int, int])
     //        caller=Call('int',[*funcPtr])  args=[int,int]
     //        caller.caller=Ident('int')     caller.args=[UE(*,funcPtr)]
-    function resolve_function_pointer(node, typeTable, reportToken) {
+    function resolve_function_pointer(node, typeTable, reportToken, namespacePath = []) {
         // Outer call: caller = inner call, args = parameter types
         const outer = node;
         const inner = outer.caller;
@@ -118,10 +179,10 @@ var TypeResolver;
             return { type: typeTable.lookup(type_checker_cjs_1.TypeSystem.PrimitiveTypeEnumeration.VOID), cv: type_checker_cjs_1.TypeSystem.NO_CV };
         }
         const ret_node = inner.caller;
-        const ret_resolved = resolve_inner(ret_node, typeTable, type_checker_cjs_1.TypeSystem.NO_CV, reportToken);
+        const ret_resolved = resolve_inner(ret_node, typeTable, type_checker_cjs_1.TypeSystem.NO_CV, reportToken, namespacePath);
         const ret_qt = new type_checker_cjs_1.TypeSystem.QualType(ret_resolved.type.kind, ret_resolved.type, ret_resolved.cv);
         const params_qts = (outer.parameters ?? []).map((p) => {
-            const r = resolve_inner(p, typeTable, type_checker_cjs_1.TypeSystem.NO_CV, reportToken);
+            const r = resolve_inner(p, typeTable, type_checker_cjs_1.TypeSystem.NO_CV, reportToken, namespacePath);
             return new type_checker_cjs_1.TypeSystem.QualType(r.type.kind, r.type, r.cv);
         });
         const fn_type = new type_checker_cjs_1.TypeSystem.FunctionAnyType(ret_qt, params_qts);
@@ -201,7 +262,10 @@ var InitializerChecker;
             }
             if (quote == "'") {
                 const inner = raw.slice(1, -1);
-                if (inner.length !== 1) {
+                CharLiteralLabel: if (inner.length !== 1) {
+                    if (interpreter_cjs_1.Interpreter.string_view.interpretEscapeSequences(inner).length == 1) {
+                        break CharLiteralLabel;
+                    }
                     new exceptions.ExpressionException("Multi-character character constant is not allowed", initNode.value);
                 }
                 const char_qt = new type_checker_cjs_1.TypeSystem.QualType(char_t.kind, char_t, type_checker_cjs_1.TypeSystem.NO_CV);
